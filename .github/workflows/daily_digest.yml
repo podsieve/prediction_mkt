@@ -1,17 +1,12 @@
-name: Scrape Arena Leaderboard
+name: Daily Digest Email
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 0 * * *'  # Midnight UTC = 8 PM EST
   workflow_dispatch:
-    inputs:
-      reason:
-        description: 'Reason for manual trigger'
-        required: false
-        default: 'manual run'
 
 jobs:
-  scrape:
+  digest:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -26,16 +21,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run scraper
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python -m src.scraper
-
-      - name: Check alerts and send email
-        if: success()
+      - name: Send daily digest
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: python -m alerts.run events
+        run: python -m alerts.run digest
