@@ -24,7 +24,7 @@ from src.config import settings
 st.set_page_config(page_title="Arena Leaderboard", layout="wide")
 
 
-@st.cache_data(ttl=300)
+@st.cache_resource
 def get_client():
     return create_client(settings.supabase_url, settings.supabase_key)
 
