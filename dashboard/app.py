@@ -8,11 +8,13 @@ import streamlit as st
 # Allow imports from repo root
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# Load secrets into env vars for src.config
-if hasattr(st, "secrets"):
+# Load secrets into env vars before importing src.config (which validates on import)
+try:
     for key in ("SUPABASE_URL", "SUPABASE_KEY"):
         if key in st.secrets:
             os.environ[key] = st.secrets[key]
+except Exception:
+    pass
 
 import plotly.graph_objects as go
 from supabase import create_client
