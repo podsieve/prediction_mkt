@@ -113,11 +113,13 @@ def get_model_history(model_name: str, days: int = 30):
 
 @st.cache_data(ttl=300)
 def get_new_models(days: int = 30):
+    from datetime import datetime, timedelta, timezone
     client = get_client()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     result = (
         client.table("models")
         .select("canonical_name, organization, first_seen_at, is_active")
-        .gte("first_seen_at", f"now() - interval '{days} days'")
+        .gte("first_seen_at", cutoff)
         .order("first_seen_at", desc=True)
         .execute()
     )

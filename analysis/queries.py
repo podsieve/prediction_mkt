@@ -120,11 +120,13 @@ def gap_to_first(model_name: str) -> Optional[Dict[str, Any]]:
 
 def first_seen_models(days: int = 7) -> List[Dict[str, Any]]:
     """Models that appeared on the leaderboard in the last N days."""
+    from datetime import datetime, timedelta, timezone
     client = get_client()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     result = (
         client.table("models")
         .select("canonical_name, organization, first_seen_at, is_active")
-        .gte("first_seen_at", f"now() - interval '{days} days'")
+        .gte("first_seen_at", cutoff)
         .order("first_seen_at", desc=True)
         .execute()
     )

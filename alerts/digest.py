@@ -146,10 +146,12 @@ def _get_top_movers(client, current_snap_id: str, limit: int = 5) -> List[Dict[s
 
 
 def _get_recent_new_models(client, days: int = 7) -> List[Dict[str, Any]]:
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     result = (
         client.table("models")
         .select("canonical_name, organization, first_seen_at")
-        .gte("first_seen_at", f"now() - interval '{days} days'")
+        .gte("first_seen_at", cutoff)
         .order("first_seen_at", desc=True)
         .execute()
     )

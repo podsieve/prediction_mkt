@@ -24,10 +24,12 @@ def get_client():
 
 
 def check_new_models(client) -> List[AlertEvent]:
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     result = (
         client.table("models")
         .select("canonical_name, organization, first_seen_at")
-        .gte("first_seen_at", "now() - interval '1 day'")
+        .gte("first_seen_at", cutoff)
         .order("first_seen_at", desc=True)
         .execute()
     )
