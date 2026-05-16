@@ -159,7 +159,7 @@ if page == "Overview":
     rankings = get_latest_rankings(snap["id"])
     if rankings:
         st.subheader("Current Rankings")
-        st.caption("Full leaderboard from the most recent scrape. Score is the Elo rating; CI is the confidence interval (how uncertain the ranking still is).")
+        st.caption("Full leaderboard from the most recent scrape. Higher score = better model. Smaller CI = more certain of the ranking.")
         display = [
             {
                 "Rank": r["rank"],
@@ -175,7 +175,7 @@ if page == "Overview":
 
         # Top 10 score trend
         st.subheader("Top 10 — Score Over Time")
-        st.caption("How the top 10 models' Elo scores have changed over time. Rising lines = gaining ground; converging lines = tightening competition.")
+        st.caption("How the top 10 models' Elo scores have changed over time. Lines going up = model improving. Look for crossovers — that's one model overtaking another.")
         top_names = [r["model_name"] for r in rankings[:10]]
         fig = go.Figure()
         for name in top_names:
@@ -217,7 +217,7 @@ elif page == "Model Detail":
 
     # Rank over time
     st.subheader("Rank Over Time")
-    st.caption("Position on the leaderboard over time. Lower = better. A downward trend means the model is climbing the rankings.")
+    st.caption("Position on the leaderboard over time. Line going down = climbing the leaderboard. Flat = stable position.")
     fig_rank = go.Figure()
     fig_rank.add_trace(go.Scatter(
         x=[h["scraped_at"] for h in history],
@@ -230,7 +230,7 @@ elif page == "Model Detail":
 
     # Score with CI band
     st.subheader("Score Trajectory")
-    st.caption("Elo score over time with confidence interval band (shaded area). A narrowing band means the score is becoming more reliable. The true score likely falls within the shaded region.")
+    st.caption("Elo score over time. Shaded band = confidence interval. Line going up = model getting stronger. Band shrinking = score becoming trustworthy.")
     dates = [h["scraped_at"] for h in history]
     scores = [h["score"] for h in history]
     cis = [h.get("score_ci") or 0 for h in history]
@@ -247,7 +247,7 @@ elif page == "Model Detail":
 
     # Votes over time
     st.subheader("Votes Over Time")
-    st.caption("Total head-to-head battles this model has participated in. A steep slope means high engagement. More votes = more confidence in the score.")
+    st.caption("Total head-to-head battles this model has participated in. Steeper slope = faster engagement. Flat = model is no longer being actively compared.")
     fig_votes = go.Figure()
     fig_votes.add_trace(go.Scatter(
         x=dates,
@@ -261,7 +261,7 @@ elif page == "Model Detail":
     # CI tightening
     if any(h.get("score_ci") for h in history):
         st.subheader("CI Over Time")
-        st.caption("Confidence interval shrinking over time. When this flattens near zero, the model's ranking has stabilized and is unlikely to change significantly.")
+        st.caption("Confidence interval over time. Line going down = ranking stabilizing. Once flat near zero, the position is locked in.")
         fig_ci = go.Figure()
         fig_ci.add_trace(go.Scatter(x=dates, y=cis, mode="lines+markers", name="CI (±)"))
         fig_ci.update_layout(yaxis_title="CI (±)", xaxis_title="Date", height=300)
