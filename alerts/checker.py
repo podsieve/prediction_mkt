@@ -25,8 +25,31 @@ def get_client():
 
 
 def check_new_models(client) -> List[AlertEvent]:
+    """Detect models that first appeared since the previous scrape.
+
+    Uses the second-most-recent snapshot timestamp as the cutoff so each
+    new model only triggers an alert once — on the first scrape after it
+    appears — instead of repeating for 24 hours.
+    """
     from datetime import datetime, timedelta, timezone
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    # Find the second-most-recent successful snapshot (any category) to use
+    # as the cutoff.  Models with first_seen_at after that timestamp are new
+    # since the last alert check.
+    recent_snaps = (
+        client.table("snapshots")
+        .select("scraped_at")
+        .eq("status", "success")
+        .order("scraped_at", desc=True)
+        .limit(2)
+        .execute()
+    )
+    if not recent_snaps.data or len(recent_snaps.data) < 2:
+        # First ever scrape or only one snapshot — fall back to 4h window
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+    else:
+        cutoff = recent_snaps.data[1]["scraped_at"]
+
     result = (
         client.table("models")
         .select("canonical_name, organization, first_seen_at")
@@ -165,17 +188,30 @@ def check_score_anomalies(client, category: str, threshold_multiplier: float = 2
 
 
 def run_all_checks() -> List[AlertEvent]:
-    """Run alert checks across all configured categories."""
+    """Run alert checks across all configured categories.
+
+    Deduplicates so that a brand-new model doesn't also fire rank_change /
+    score_anomaly alerts on the same run (the "new model" alert is enough).
+    """
     client = get_client()
     events = []
 
     # New models are category-agnostic (shared models table)
-    events.extend(check_new_models(client))
+    new_model_events = check_new_models(client)
+    events.extend(new_model_events)
+
+    # Track names of newly appeared models so we can suppress noisy
+    # rank/score alerts that would duplicate the new-model notification.
+    new_model_names = {e.model_name for e in new_model_events}
 
     # Rank changes and score anomalies are per-category
     for category in settings.scrape_categories:
-        events.extend(check_rank_changes(client, category=category, threshold=settings.alert_rank_threshold))
-        events.extend(check_score_anomalies(client, category=category))
+        rank_events = check_rank_changes(client, category=category, threshold=settings.alert_rank_threshold)
+        score_events = check_score_anomalies(client, category=category)
+
+        # Suppress rank/score alerts for models that already have a new_model alert
+        events.extend(e for e in rank_events if e.model_name not in new_model_names)
+        events.extend(e for e in score_events if e.model_name not in new_model_names)
 
     logger.info("Alert check complete: %d events found across %d categories",
                 len(events), len(settings.scrape_categories))
