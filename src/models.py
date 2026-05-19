@@ -27,6 +27,7 @@ class ScrapedModel(BaseModel):
 class ScrapeResult(BaseModel):
     scraped_at: datetime
     source_url: str
+    category: str = "overall"
     total_models: int = Field(ge=0)
     total_votes: Optional[int] = Field(default=None, ge=0)
     models: List[ScrapedModel]

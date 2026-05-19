@@ -16,6 +16,7 @@ class AlertEvent:
     event_type: str
     model_name: str
     summary: str
+    category: str = "overall"
     details: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -45,11 +46,12 @@ def check_new_models(client) -> List[AlertEvent]:
     return events
 
 
-def check_rank_changes(client, threshold: int = 3) -> List[AlertEvent]:
+def check_rank_changes(client, category: str, threshold: int = 3) -> List[AlertEvent]:
     snapshots = (
         client.table("snapshots")
         .select("id, scraped_at")
         .eq("status", "success")
+        .eq("category", category)
         .order("scraped_at", desc=True)
         .limit(2)
         .execute()
@@ -95,18 +97,20 @@ def check_rank_changes(client, threshold: int = 3) -> List[AlertEvent]:
             events.append(AlertEvent(
                 event_type="rank_change",
                 model_name=name,
-                summary=f"{name} {direction} {abs(delta)} ranks (#{prev_ranks[mid]} -> #{r['rank']})",
+                summary=f"[{category}] {name} {direction} {abs(delta)} ranks (#{prev_ranks[mid]} -> #{r['rank']})",
+                category=category,
                 details={"rank_before": prev_ranks[mid], "rank_after": r["rank"], "delta": delta},
             ))
 
     return events
 
 
-def check_score_anomalies(client, threshold_multiplier: float = 2.0) -> List[AlertEvent]:
+def check_score_anomalies(client, category: str, threshold_multiplier: float = 2.0) -> List[AlertEvent]:
     snapshots = (
         client.table("snapshots")
         .select("id")
         .eq("status", "success")
+        .eq("category", category)
         .order("scraped_at", desc=True)
         .limit(2)
         .execute()
@@ -152,7 +156,8 @@ def check_score_anomalies(client, threshold_multiplier: float = 2.0) -> List[Ale
             events.append(AlertEvent(
                 event_type="score_anomaly",
                 model_name=name,
-                summary=f"{name} score moved {delta:.1f} (>{threshold_multiplier}x CI of {ci:.1f})",
+                summary=f"[{category}] {name} score moved {delta:.1f} (>{threshold_multiplier}x CI of {ci:.1f})",
+                category=category,
                 details={"score_before": prev_scores[mid], "score_after": r["score"], "delta": delta, "ci": ci},
             ))
 
@@ -160,10 +165,18 @@ def check_score_anomalies(client, threshold_multiplier: float = 2.0) -> List[Ale
 
 
 def run_all_checks() -> List[AlertEvent]:
+    """Run alert checks across all configured categories."""
     client = get_client()
     events = []
+
+    # New models are category-agnostic (shared models table)
     events.extend(check_new_models(client))
-    events.extend(check_rank_changes(client, threshold=settings.alert_rank_threshold))
-    events.extend(check_score_anomalies(client))
-    logger.info("Alert check complete: %d events found", len(events))
+
+    # Rank changes and score anomalies are per-category
+    for category in settings.scrape_categories:
+        events.extend(check_rank_changes(client, category=category, threshold=settings.alert_rank_threshold))
+        events.extend(check_score_anomalies(client, category=category))
+
+    logger.info("Alert check complete: %d events found across %d categories",
+                len(events), len(settings.scrape_categories))
     return events

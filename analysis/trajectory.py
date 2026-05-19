@@ -15,7 +15,7 @@ def get_client():
     return create_client(settings.supabase_url, settings.supabase_key)
 
 
-def ci_tightening_rate(model_name: str) -> Optional[Dict[str, Any]]:
+def ci_tightening_rate(model_name: str, category: str = "overall") -> Optional[Dict[str, Any]]:
     """Rate at which CI is narrowing (CI units per day).
 
     Faster tightening = more battles being fought = more confidence in ranking.
@@ -27,30 +27,41 @@ def ci_tightening_rate(model_name: str) -> Optional[Dict[str, Any]]:
         client.table("models")
         .select("id, first_seen_at")
         .eq("canonical_name", model_name)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
     if not model_result.data:
         return None
 
-    model_id = model_result.data["id"]
+    model_id = model_result.data[0]["id"]
     first_seen = datetime.fromisoformat(
-        model_result.data["first_seen_at"].replace("Z", "+00:00")
+        model_result.data[0]["first_seen_at"].replace("Z", "+00:00")
     )
+
+    # Get snapshot IDs for this category
+    cat_snaps = (
+        client.table("snapshots")
+        .select("id")
+        .eq("status", "success")
+        .eq("category", category)
+        .execute()
+    )
+    snap_ids = {s["id"] for s in (cat_snaps.data or [])}
 
     rankings = (
         client.table("rankings")
-        .select("score_ci, votes, created_at")
+        .select("score_ci, votes, created_at, snapshot_id")
         .eq("model_id", model_id)
         .not_.is_("score_ci", "null")
         .order("created_at", desc=False)
         .execute()
     )
-    if not rankings.data or len(rankings.data) < 3:
+    filtered = [r for r in (rankings.data or []) if r["snapshot_id"] in snap_ids]
+    if len(filtered) < 3:
         return None
 
     points = []
-    for r in rankings.data:
+    for r in filtered:
         t = datetime.fromisoformat(r["created_at"].replace("Z", "+00:00"))
         days = (t - first_seen).total_seconds() / 86400.0
         points.append((days, r["score_ci"], r["votes"]))
@@ -80,60 +91,82 @@ def ci_tightening_rate(model_name: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def new_model_report(model_name: str) -> Optional[Dict[str, Any]]:
-    """Full launch trajectory report for a newly released model."""
+def new_model_report(model_name: str, category: str = "overall") -> Optional[Dict[str, Any]]:
+    """Full launch trajectory report for a newly released model in a category."""
     client = get_client()
 
     model_result = (
         client.table("models")
         .select("id, canonical_name, organization, first_seen_at")
         .eq("canonical_name", model_name)
-        .maybe_single()
+        .limit(1)
         .execute()
     )
     if not model_result.data:
         return None
 
-    model_id = model_result.data["id"]
+    model_id = model_result.data[0]["id"]
     first_seen = datetime.fromisoformat(
-        model_result.data["first_seen_at"].replace("Z", "+00:00")
+        model_result.data[0]["first_seen_at"].replace("Z", "+00:00")
     )
+
+    # Get snapshot IDs for this category
+    cat_snaps = (
+        client.table("snapshots")
+        .select("id")
+        .eq("status", "success")
+        .eq("category", category)
+        .execute()
+    )
+    snap_ids = {s["id"] for s in (cat_snaps.data or [])}
 
     rankings = (
         client.table("rankings")
-        .select("rank, score, score_ci, votes, created_at")
+        .select("rank, score, score_ci, votes, created_at, snapshot_id")
         .eq("model_id", model_id)
         .order("created_at", desc=False)
         .execute()
     )
-    if not rankings.data:
+    filtered = [r for r in (rankings.data or []) if r["snapshot_id"] in snap_ids]
+    if not filtered:
         return None
 
-    first = rankings.data[0]
-    latest = rankings.data[-1]
+    first = filtered[0]
+    latest = filtered[-1]
     now = datetime.fromisoformat(latest["created_at"].replace("Z", "+00:00"))
     days_tracked = (now - first_seen).total_seconds() / 86400.0
 
     score_change = latest["score"] - first["score"]
 
-    # Get current #1 for gap analysis
-    top_result = (
-        client.table("rankings")
-        .select("score, score_ci")
-        .eq("rank", 1)
-        .order("created_at", desc=True)
+    # Get current #1 for this category
+    latest_snap = (
+        client.table("snapshots")
+        .select("id")
+        .eq("status", "success")
+        .eq("category", category)
+        .order("scraped_at", desc=True)
         .limit(1)
         .execute()
     )
     gap_to_first = None
-    if top_result.data:
-        gap_to_first = top_result.data[0]["score"] - latest["score"]
+    if latest_snap.data:
+        top_result = (
+            client.table("rankings")
+            .select("score")
+            .eq("snapshot_id", latest_snap.data[0]["id"])
+            .eq("rank", 1)
+            .limit(1)
+            .execute()
+        )
+        if top_result.data:
+            gap_to_first = top_result.data[0]["score"] - latest["score"]
 
     return {
         "model": model_name,
-        "organization": model_result.data["organization"],
+        "category": category,
+        "organization": model_result.data[0]["organization"],
         "days_since_launch": round(days_tracked, 1),
-        "snapshots_collected": len(rankings.data),
+        "snapshots_collected": len(filtered),
         "initial_rank": first["rank"],
         "current_rank": latest["rank"],
         "rank_change": first["rank"] - latest["rank"],

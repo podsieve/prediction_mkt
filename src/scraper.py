@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import List
 
 import requests
 from tenacity import (
@@ -42,27 +43,48 @@ def fetch_page(url: str) -> str:
     return response.text
 
 
-def scrape() -> ScrapeResult:
-    url = settings.scrape_url
-    logger.info("Fetching leaderboard from %s", url)
+def scrape_category(category: str, url: str) -> ScrapeResult:
+    """Scrape a single leaderboard category and return the parsed result."""
+    logger.info("Fetching %s leaderboard from %s", category, url)
     html = fetch_page(url)
-    logger.info("Fetched %d bytes, parsing...", len(html))
+    logger.info("Fetched %d bytes for %s, parsing...", len(html), category)
 
-    result = parse_leaderboard(html, url)
+    result = parse_leaderboard(html, url, category=category)
     logger.info(
-        "Parsed %d models (total votes: %s) in %dms",
+        "[%s] Parsed %d models (total votes: %s) in %dms",
+        category,
         result.total_models,
         result.total_votes,
         result.scrape_duration_ms,
     )
 
-    if result.total_models < 50:
+    if result.total_models < 20:
         logger.warning(
-            "Only parsed %d models — possible layout change or partial page",
+            "[%s] Only parsed %d models — possible layout change or partial page",
+            category,
             result.total_models,
         )
 
     return result
+
+
+def scrape() -> ScrapeResult:
+    """Scrape the default (overall) category. Kept for backward compat."""
+    return scrape_category("overall", settings.scrape_url)
+
+
+def scrape_all() -> List[ScrapeResult]:
+    """Scrape all configured categories and return a list of results."""
+    results: List[ScrapeResult] = []
+    for category, url in settings.scrape_categories.items():
+        try:
+            result = scrape_category(category, url)
+            results.append(result)
+        except Exception as e:
+            logger.error("[%s] Scrape failed: %s", category, e)
+            from src.db import record_failed_scrape
+            record_failed_scrape(str(e), category=category, source_url=url)
+    return results
 
 
 def main():
@@ -71,17 +93,23 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    try:
-        result = scrape()
-    except Exception as e:
-        logger.error("Scrape failed: %s", e)
-        from src.db import record_failed_scrape
-        record_failed_scrape(str(e))
+    from src.db import store_results
+
+    results = scrape_all()
+    if not results:
+        logger.error("All category scrapes failed")
         sys.exit(1)
 
-    from src.db import store_results
-    store_results(result)
-    logger.info("Done. Stored snapshot with %d models.", result.total_models)
+    for result in results:
+        store_results(result)
+        logger.info(
+            "[%s] Stored snapshot with %d models.",
+            result.category,
+            result.total_models,
+        )
+
+    logger.info("Done. Scraped %d/%d categories successfully.",
+                len(results), len(settings.scrape_categories))
 
 
 if __name__ == "__main__":

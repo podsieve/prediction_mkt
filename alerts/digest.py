@@ -9,24 +9,31 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+CATEGORY_LABELS = {
+    "overall": "Overall",
+    "coding": "Coding",
+}
+
 
 def get_client():
     return create_client(settings.supabase_url, settings.supabase_key)
 
 
-def build_digest() -> str:
-    client = get_client()
+def _build_category_section(client, category: str) -> str:
+    """Build the digest HTML for a single category."""
+    label = CATEGORY_LABELS.get(category, category.title())
 
     snapshot = (
         client.table("snapshots")
         .select("id, scraped_at, total_models, total_votes")
         .eq("status", "success")
+        .eq("category", category)
         .order("scraped_at", desc=True)
         .limit(1)
         .execute()
     )
     if not snapshot.data:
-        return "<p>No snapshot data available.</p>"
+        return f"<h2>{label}</h2><p>No snapshot data available.</p>"
 
     snap = snapshot.data[0]
     snap_id = snap["id"]
@@ -47,10 +54,10 @@ def build_digest() -> str:
         for row in result.data or []:
             model_names[row["id"]] = row
 
-    top_movers = _get_top_movers(client, snap_id)
-    new_models = _get_recent_new_models(client)
+    top_movers = _get_top_movers(client, snap_id, category)
 
     parts = []
+    parts.append(f"<h2>{label}</h2>")
     parts.append(f"<p><strong>Last scraped:</strong> {snap['scraped_at']}<br>")
     parts.append(f"<strong>Models:</strong> {snap['total_models']} &nbsp; ")
     parts.append(f"<strong>Total votes:</strong> {snap['total_votes']:,}</p>")
@@ -84,21 +91,36 @@ def build_digest() -> str:
                          f'(#{m["rank_before"]} &rarr; #{m["rank_after"]})</li>')
         parts.append("</ul>")
 
+    return "\n".join(parts)
+
+
+def build_digest() -> str:
+    """Build a digest covering all configured categories."""
+    client = get_client()
+
+    sections = []
+    for category in settings.scrape_categories:
+        sections.append(_build_category_section(client, category))
+
+    # New models section (category-agnostic)
+    new_models = _get_recent_new_models(client)
     if new_models:
-        parts.append("<h3>New Models (7 days)</h3><ul>")
+        parts = ["<h2>New Models (7 days)</h2><ul>"]
         for m in new_models:
             org = m.get("organization") or ""
             parts.append(f'<li>{m["canonical_name"]} {f"({org})" if org else ""}</li>')
         parts.append("</ul>")
+        sections.append("\n".join(parts))
 
-    return "\n".join(parts)
+    return "\n<hr>\n".join(sections)
 
 
-def _get_top_movers(client, current_snap_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+def _get_top_movers(client, current_snap_id: str, category: str, limit: int = 5) -> List[Dict[str, Any]]:
     snapshots = (
         client.table("snapshots")
         .select("id")
         .eq("status", "success")
+        .eq("category", category)
         .order("scraped_at", desc=True)
         .limit(2)
         .execute()

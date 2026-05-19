@@ -10,14 +10,22 @@ from src.parser import (
     parse_total_votes,
 )
 
-FIXTURE_PATH = os.path.join(
-    os.path.dirname(__file__), "fixtures", "sample_leaderboard.html"
-)
+FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
+OVERALL_FIXTURE = os.path.join(FIXTURE_DIR, "sample_leaderboard.html")
+CODING_FIXTURE = os.path.join(FIXTURE_DIR, "sample_coding_leaderboard.html")
 
+
+# --- Fixtures ---
 
 @pytest.fixture
 def sample_html():
-    with open(FIXTURE_PATH, "r") as f:
+    with open(OVERALL_FIXTURE, "r") as f:
+        return f.read()
+
+
+@pytest.fixture
+def coding_html():
+    with open(CODING_FIXTURE, "r") as f:
         return f.read()
 
 
@@ -27,6 +35,17 @@ def scrape_result(sample_html):
         sample_html, "https://arena.ai/leaderboard/text/overall-no-style-control"
     )
 
+
+@pytest.fixture
+def coding_result(coding_html):
+    return parse_leaderboard(
+        coding_html,
+        "https://arena.ai/leaderboard/text/coding-no-style-control",
+        category="coding",
+    )
+
+
+# --- parse_int ---
 
 class TestParseInt:
     def test_plain_number(self):
@@ -39,6 +58,8 @@ class TestParseInt:
         assert parse_int("  1,234  ") == 1234
 
 
+# --- Overall leaderboard ---
+
 class TestParseLeaderboard:
     def test_parses_all_models(self, scrape_result):
         assert scrape_result.total_models == 357
@@ -48,6 +69,9 @@ class TestParseLeaderboard:
 
     def test_source_url(self, scrape_result):
         assert scrape_result.source_url == "https://arena.ai/leaderboard/text/overall-no-style-control"
+
+    def test_default_category(self, scrape_result):
+        assert scrape_result.category == "overall"
 
     def test_has_html_hash(self, scrape_result):
         assert len(scrape_result.raw_html_hash) == 64
@@ -108,6 +132,72 @@ class TestParseLeaderboard:
         assert scrape_result.scrape_duration_ms >= 0
 
 
+# --- Coding leaderboard ---
+
+class TestParseCodingLeaderboard:
+    def test_category_is_coding(self, coding_result):
+        assert coding_result.category == "coding"
+
+    def test_source_url(self, coding_result):
+        assert "coding" in coding_result.source_url
+
+    def test_parses_models(self, coding_result):
+        assert coding_result.total_models > 100
+
+    def test_total_votes(self, coding_result):
+        assert coding_result.total_votes is not None
+        assert coding_result.total_votes > 0
+
+    def test_first_model_rank(self, coding_result):
+        assert coding_result.models[0].rank == 1
+
+    def test_first_model_has_score(self, coding_result):
+        assert coding_result.models[0].score > 1000
+
+    def test_first_model_has_votes(self, coding_result):
+        assert coding_result.models[0].votes > 0
+
+    def test_ranks_are_sequential(self, coding_result):
+        ranks = [m.rank for m in coding_result.models]
+        assert ranks == list(range(1, len(ranks) + 1))
+
+    def test_all_scores_positive(self, coding_result):
+        for m in coding_result.models:
+            assert m.score > 0
+
+    def test_last_model_lower_score(self, coding_result):
+        assert coding_result.models[-1].score < coding_result.models[0].score
+
+    def test_has_html_hash(self, coding_result):
+        assert len(coding_result.raw_html_hash) == 64
+
+    def test_organization_parsed_for_top(self, coding_result):
+        """At least some top models should have an organization."""
+        top_10 = coding_result.models[:10]
+        orgs = [m.organization for m in top_10 if m.organization]
+        assert len(orgs) > 0
+
+
+# --- Shared model identity ---
+
+class TestCrossCategory:
+    def test_shared_models_exist(self, scrape_result, coding_result):
+        """Some models should appear in both overall and coding leaderboards."""
+        overall_names = {m.model_name for m in scrape_result.models}
+        coding_names = {m.model_name for m in coding_result.models}
+        overlap = overall_names & coding_names
+        assert len(overlap) > 10, "Expected significant overlap between overall and coding models"
+
+    def test_categories_differ(self, scrape_result, coding_result):
+        assert scrape_result.category != coding_result.category
+
+    def test_different_vote_counts(self, scrape_result, coding_result):
+        """Coding and overall should have different total vote counts."""
+        assert scrape_result.total_votes != coding_result.total_votes
+
+
+# --- parse_total_votes ---
+
 class TestParseTotalVotes:
     def test_from_html(self, sample_html):
         from bs4 import BeautifulSoup
@@ -120,3 +210,10 @@ class TestParseTotalVotes:
         soup = BeautifulSoup("<html></html>", "html.parser")
         votes = parse_total_votes(soup)
         assert votes is None
+
+    def test_coding_total_votes(self, coding_html):
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(coding_html, "html.parser")
+        votes = parse_total_votes(soup)
+        assert votes is not None
+        assert votes > 0

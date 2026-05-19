@@ -57,31 +57,76 @@ def bulk_insert_new_models(client, new_models: List[Dict], model_cache: Dict[str
     return model_cache
 
 
-def mark_inactive_models(client, seen_model_ids: Set[str], now: str):
+def _get_category_model_ids(client, category: str) -> Set[str]:
+    """Get model IDs that have appeared in any successful snapshot for a category."""
     result = (
-        client.table("models")
-        .select("id, canonical_name")
-        .eq("is_active", True)
+        client.table("snapshots")
+        .select("id")
+        .eq("status", "success")
+        .eq("category", category)
+        .order("scraped_at", desc=True)
+        .limit(1)
         .execute()
     )
-    active_models = result.data or []
+    if not result.data:
+        return set()
 
-    for model in active_models:
-        if model["id"] not in seen_model_ids:
-            logger.info("Model no longer on leaderboard: %s", model["canonical_name"])
-            client.table("models").update(
-                {"is_active": False, "last_seen_at": now}
-            ).eq("id", model["id"]).execute()
+    prev_snap_id = result.data[0]["id"]
+    rankings = (
+        client.table("rankings")
+        .select("model_id")
+        .eq("snapshot_id", prev_snap_id)
+        .execute()
+    )
+    return {r["model_id"] for r in (rankings.data or [])}
+
+
+def mark_inactive_models(client, seen_model_ids: Set[str], now: str, category: str):
+    """Mark models inactive only if they were in this category's previous
+    snapshot but are no longer present. Models appearing in other categories
+    are not affected."""
+    previously_in_category = _get_category_model_ids(client, category)
+    if not previously_in_category:
+        return
+
+    disappeared = previously_in_category - seen_model_ids
+    if not disappeared:
+        return
+
+    # Only mark inactive if the model isn't active in ANY other category.
+    # Check if these models appear in the latest snapshot of any other category.
+    other_categories = [
+        cat for cat in settings.scrape_categories if cat != category
+    ]
+    still_active_elsewhere: Set[str] = set()
+    for other_cat in other_categories:
+        still_active_elsewhere |= _get_category_model_ids(client, other_cat)
+
+    to_deactivate = disappeared - still_active_elsewhere
+
+    for model_id in to_deactivate:
+        client.table("models").update(
+            {"is_active": False, "last_seen_at": now}
+        ).eq("id", model_id).execute()
+
+    if to_deactivate:
+        logger.info(
+            "[%s] Marked %d models inactive (disappeared from all categories)",
+            category,
+            len(to_deactivate),
+        )
 
 
 def store_results(scrape_result: ScrapeResult):
     client = get_client()
     now = scrape_result.scraped_at.isoformat()
+    category = scrape_result.category
 
     snapshot = client.table("snapshots").insert(
         {
             "scraped_at": now,
             "source_url": scrape_result.source_url,
+            "category": category,
             "total_models": scrape_result.total_models,
             "total_votes": scrape_result.total_votes,
             "scrape_duration_ms": scrape_result.scrape_duration_ms,
@@ -90,7 +135,7 @@ def store_results(scrape_result: ScrapeResult):
         }
     ).execute()
     snapshot_id = snapshot.data[0]["id"]
-    logger.info("Created snapshot %s", snapshot_id)
+    logger.info("[%s] Created snapshot %s", category, snapshot_id)
 
     model_cache, alias_cache = load_caches(client)
 
@@ -110,7 +155,8 @@ def store_results(scrape_result: ScrapeResult):
 
     if new_models:
         model_cache = bulk_insert_new_models(client, new_models, model_cache)
-        logger.info("New models detected: %s", [m["canonical_name"] for m in new_models])
+        logger.info("[%s] New models detected: %s", category,
+                    [m["canonical_name"] for m in new_models])
 
     # Build rankings batch
     seen_model_ids: Set[str] = set()
@@ -120,7 +166,7 @@ def store_results(scrape_result: ScrapeResult):
         name = scraped_model.model_name
         model_id = model_cache.get(name) or alias_cache.get(name)
         if not model_id:
-            logger.warning("Could not resolve model_id for: %s", name)
+            logger.warning("[%s] Could not resolve model_id for: %s", category, name)
             continue
 
         seen_model_ids.add(model_id)
@@ -143,7 +189,8 @@ def store_results(scrape_result: ScrapeResult):
         batch = rankings_batch[i:i + batch_size]
         client.table("rankings").insert(batch).execute()
 
-    logger.info("Inserted %d rankings for snapshot %s", len(rankings_batch), snapshot_id)
+    logger.info("[%s] Inserted %d rankings for snapshot %s",
+                category, len(rankings_batch), snapshot_id)
 
     # Bulk update last_seen_at for all seen models
     seen_ids = list(seen_model_ids)
@@ -151,20 +198,25 @@ def store_results(scrape_result: ScrapeResult):
         batch_ids = seen_ids[i:i + 100]
         client.table("models").update({"last_seen_at": now}).in_("id", batch_ids).execute()
 
-    mark_inactive_models(client, seen_model_ids, now)
+    mark_inactive_models(client, seen_model_ids, now, category)
 
 
-def record_failed_scrape(error_message: str):
+def record_failed_scrape(
+    error_message: str,
+    category: str = "overall",
+    source_url: Optional[str] = None,
+):
     try:
         client = get_client()
         client.table("snapshots").insert(
             {
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
-                "source_url": settings.scrape_url,
+                "source_url": source_url or settings.scrape_url,
+                "category": category,
                 "status": "failed",
                 "error_message": error_message[:1000],
             }
         ).execute()
-        logger.info("Recorded failed scrape snapshot")
+        logger.info("[%s] Recorded failed scrape snapshot", category)
     except Exception as e:
-        logger.error("Failed to record failed scrape: %s", e)
+        logger.error("[%s] Failed to record failed scrape: %s", category, e)

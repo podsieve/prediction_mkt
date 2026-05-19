@@ -109,7 +109,7 @@ def parse_total_votes(soup: BeautifulSoup) -> Optional[int]:
     return None
 
 
-def parse_leaderboard(html: str, source_url: str) -> ScrapeResult:
+def parse_leaderboard(html: str, source_url: str, category: str = "overall") -> ScrapeResult:
     start_time = time.monotonic()
     soup = BeautifulSoup(html, "html.parser")
     raw_html_hash = hashlib.sha256(html.encode()).hexdigest()
@@ -162,6 +162,7 @@ def parse_leaderboard(html: str, source_url: str) -> ScrapeResult:
     return ScrapeResult(
         scraped_at=datetime.now(timezone.utc),
         source_url=source_url,
+        category=category,
         total_models=len(models),
         total_votes=total_votes,
         models=models,

@@ -30,12 +30,27 @@ def get_client():
 
 
 @st.cache_data(ttl=300)
-def get_latest_snapshot():
+def get_categories():
+    """Fetch distinct categories that have at least one successful snapshot."""
+    client = get_client()
+    result = (
+        client.table("snapshots")
+        .select("category")
+        .eq("status", "success")
+        .execute()
+    )
+    cats = sorted({r["category"] for r in (result.data or [])})
+    return cats if cats else ["overall"]
+
+
+@st.cache_data(ttl=300)
+def get_latest_snapshot(category: str):
     client = get_client()
     result = (
         client.table("snapshots")
         .select("id, scraped_at, total_models, total_votes")
         .eq("status", "success")
+        .eq("category", category)
         .order("scraped_at", desc=True)
         .limit(1)
         .execute()
@@ -73,7 +88,7 @@ def get_latest_rankings(snapshot_id: str):
 
 
 @st.cache_data(ttl=300)
-def get_model_history(model_name: str, days: int = 30):
+def get_model_history(model_name: str, category: str, days: int = 30):
     client = get_client()
     model = (
         client.table("models")
@@ -86,6 +101,21 @@ def get_model_history(model_name: str, days: int = 30):
         return []
 
     model_id = model.data[0]["id"]
+
+    # Get snapshot IDs for this category
+    snapshots_result = (
+        client.table("snapshots")
+        .select("id, scraped_at, total_votes")
+        .eq("status", "success")
+        .eq("category", category)
+        .execute()
+    )
+    snap_map = {s["id"]: s for s in (snapshots_result.data or [])}
+
+    if not snap_map:
+        return []
+
+    # Fetch rankings for this model, then filter to category snapshots
     rankings = (
         client.table("rankings")
         .select("rank, score, score_ci, votes, created_at, snapshot_id")
@@ -94,21 +124,16 @@ def get_model_history(model_name: str, days: int = 30):
         .execute()
     )
 
-    snapshots_result = (
-        client.table("snapshots")
-        .select("id, scraped_at, total_votes")
-        .eq("status", "success")
-        .execute()
-    )
-    snap_map = {s["id"]: s for s in (snapshots_result.data or [])}
-
+    filtered = []
     for r in rankings.data or []:
-        snap = snap_map.get(r["snapshot_id"], {})
-        r["scraped_at"] = snap.get("scraped_at", r["created_at"])
-        total = snap.get("total_votes") or 0
-        r["vote_share_pct"] = (r["votes"] / total * 100) if total > 0 else 0
+        if r["snapshot_id"] in snap_map:
+            snap = snap_map[r["snapshot_id"]]
+            r["scraped_at"] = snap.get("scraped_at", r["created_at"])
+            total = snap.get("total_votes") or 0
+            r["vote_share_pct"] = (r["votes"] / total * 100) if total > 0 else 0
+            filtered.append(r)
 
-    return rankings.data or []
+    return filtered
 
 
 @st.cache_data(ttl=300)
@@ -127,28 +152,68 @@ def get_new_models(days: int = 30):
 
 
 @st.cache_data(ttl=300)
-def get_all_model_names():
+def get_all_model_names(category: str):
+    """Get model names that appear in the latest snapshot for a category."""
     client = get_client()
-    result = (
-        client.table("models")
-        .select("canonical_name")
-        .eq("is_active", True)
-        .order("canonical_name")
+
+    snap = (
+        client.table("snapshots")
+        .select("id")
+        .eq("status", "success")
+        .eq("category", category)
+        .order("scraped_at", desc=True)
+        .limit(1)
         .execute()
     )
-    return [r["canonical_name"] for r in (result.data or [])]
+    if not snap.data:
+        return []
+
+    rankings = (
+        client.table("rankings")
+        .select("model_id")
+        .eq("snapshot_id", snap.data[0]["id"])
+        .execute()
+    )
+    model_ids = [r["model_id"] for r in (rankings.data or [])]
+    if not model_ids:
+        return []
+
+    names = []
+    for i in range(0, len(model_ids), 100):
+        batch = model_ids[i:i + 100]
+        result = (
+            client.table("models")
+            .select("canonical_name")
+            .in_("id", batch)
+            .order("canonical_name")
+            .execute()
+        )
+        names.extend(r["canonical_name"] for r in (result.data or []))
+
+    return sorted(names)
 
 
 # --- Sidebar ---
+CATEGORY_LABELS = {
+    "overall": "Overall",
+    "coding": "Coding",
+}
+
+categories = get_categories()
+category_display = [CATEGORY_LABELS.get(c, c.title()) for c in categories]
+
+selected_display = st.sidebar.selectbox("Category", category_display)
+category = categories[category_display.index(selected_display)]
+
 page = st.sidebar.radio("Page", ["Overview", "Model Detail", "New Models"])
 
 # --- Overview ---
 if page == "Overview":
-    st.title("Arena.ai Leaderboard")
+    st.title(f"Arena.ai Leaderboard — {CATEGORY_LABELS.get(category, category.title())}")
 
-    snap = get_latest_snapshot()
+    snap = get_latest_snapshot(category)
     if not snap:
-        st.warning("No snapshot data yet.")
+        st.warning(f"No snapshot data yet for {category}.")
         st.stop()
 
     col1, col2, col3 = st.columns(3)
@@ -179,7 +244,7 @@ if page == "Overview":
         top_names = [r["model_name"] for r in rankings[:10]]
         fig = go.Figure()
         for name in top_names:
-            history = get_model_history(name)
+            history = get_model_history(name, category)
             if history:
                 fig.add_trace(go.Scatter(
                     x=[h["scraped_at"] for h in history],
@@ -192,18 +257,18 @@ if page == "Overview":
 
 # --- Model Detail ---
 elif page == "Model Detail":
-    st.title("Model Detail")
+    st.title(f"Model Detail — {CATEGORY_LABELS.get(category, category.title())}")
 
-    models = get_all_model_names()
+    models = get_all_model_names(category)
     if not models:
-        st.warning("No models found.")
+        st.warning(f"No models found for {category}.")
         st.stop()
 
     selected = st.selectbox("Select a model", models)
-    history = get_model_history(selected)
+    history = get_model_history(selected, category)
 
     if not history:
-        st.info(f"No data for {selected}")
+        st.info(f"No data for {selected} in {category}")
         st.stop()
 
     latest = history[-1]
