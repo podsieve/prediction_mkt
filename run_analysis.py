@@ -1,4 +1,4 @@
-""" 
+"""
 Arena.ai Leaderboard — Data Analysis & Feature Suggestion Report
 Run: SUPABASE_URL=... SUPABASE_KEY=... RESEND_API_KEY=... python run_analysis.py
 """
@@ -23,8 +23,8 @@ def fetch_all(table, select="*", filters=None, order=None, limit=20000):
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 print("Fetching data…")
-snapshots = fetch_all("snapshots", order="scraped_at")
-models    = fetch_all("models")
+snapshots    = fetch_all("snapshots", order="scraped_at")
+models       = fetch_all("models")
 rankings_raw = fetch_all(
     "rankings",
     select="snapshot_id,model_id,rank,score,score_ci,votes",
@@ -50,11 +50,11 @@ rows.sort(key=lambda x: x["scraped_at"])
 overall = [r for r in rows if r["category"] == "overall"]
 coding  = [r for r in rows if r["category"] == "coding"]
 
-good_snaps   = [s for s in snapshots if s.get("status") == "success"]
-dates        = sorted(s["scraped_at"] for s in good_snaps)
-date_start   = dates[0][:10]  if dates else "N/A"
-date_end     = dates[-1][:10] if dates else "N/A"
-n_snapshots  = len(good_snaps)
+good_snaps  = [s for s in snapshots if s.get("status") == "success"]
+dates       = sorted(s["scraped_at"] for s in good_snaps)
+date_start  = dates[0][:10]  if dates else "N/A"
+date_end    = dates[-1][:10] if dates else "N/A"
+n_snapshots = len(good_snaps)
 
 print(f"  snapshots={n_snapshots}  models={len(models)}  ranking_rows={len(rows)}")
 print(f"  date range: {date_start} → {date_end}")
@@ -150,11 +150,11 @@ for i in range(1, len(vote_data)):
             hour_deltas[dt.hour].append(dv)
             dow_deltas[dt.weekday()].append(dv)
 
-hourly_avg  = {h: statistics.mean(v) for h, v in hour_deltas.items()} if hour_deltas else {}
-dow_avg     = {d: statistics.mean(v) for d, v in dow_deltas.items()}   if dow_deltas  else {}
-peak_hour   = max(hourly_avg, key=hourly_avg.get) if hourly_avg else None
-slow_hour   = min(hourly_avg, key=hourly_avg.get) if hourly_avg else None
-peak_dow    = max(dow_avg, key=dow_avg.get) if dow_avg else None
+hourly_avg = {h: statistics.mean(v) for h, v in hour_deltas.items()} if hour_deltas else {}
+dow_avg    = {d: statistics.mean(v) for d, v in dow_deltas.items()}   if dow_deltas  else {}
+peak_hour  = max(hourly_avg, key=hourly_avg.get) if hourly_avg else None
+slow_hour  = min(hourly_avg, key=hourly_avg.get) if hourly_avg else None
+peak_dow   = max(dow_avg, key=dow_avg.get) if dow_avg else None
 days_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ for r in overall:
 
 new_model_trajectories = {}
 for mid, first_time in model_first.items():
-    if date_start and first_time > dates[0]:
+    if dates and first_time > dates[0]:
         series = sorted(
             [(r["scraped_at"], r["rank"]) for r in overall if r["model_id"] == mid],
             key=lambda x: x[0],
@@ -287,7 +287,7 @@ if peak_dow is not None:
     print(f"Peak day: {days_labels[peak_dow]}  avg +{dow_avg[peak_dow]:.0f} votes/snap")
 
 print("\n=== CI PREDICTOR ===")
-print(f"Wide CI (>15) next-snap rank change avg : {wide_avg:.2f} (n={len(wide_changes)})")
+print(f"Wide CI (>15) next-snap rank change avg:   {wide_avg:.2f} (n={len(wide_changes)})")
 print(f"Narrow CI (<=15) next-snap rank change avg: {narrow_avg:.2f} (n={len(narrow_changes)})")
 print(f"Wide:Narrow ratio: {wide_avg/max(0.01,narrow_avg):.1f}x")
 print(f"Pearson r(CI_width, |rank_delta|) = {ci_corr:.3f}")
@@ -319,9 +319,8 @@ if m_total:
 # ─────────────────────────────────────────────────────────────────────────────
 # Build and send email
 # ─────────────────────────────────────────────────────────────────────────────
-def html_row(label, value, color=""):
-    style = f" style='color:{color};font-weight:bold;'" if color else ""
-    return f"<tr><td style='padding:4px 12px 4px 0;color:#666;'>{label}</td><td{style}>{value}</td></tr>"
+def html_row(label, value):
+    return f"<tr><td style='padding:4px 12px 4px 0;color:#666;'>{label}</td><td>{value}</td></tr>"
 
 def html_model_table(rows, headers):
     ths = "".join(f"<th style='text-align:left;padding:4px 10px 4px 0;border-bottom:2px solid #333;'>{h}</th>" for h in headers)
@@ -332,16 +331,13 @@ def html_model_table(rows, headers):
     return f"<table style='border-collapse:collapse;font-size:13px;'><thead><tr>{ths}</tr></thead><tbody>{body}</tbody></table>"
 
 vol_rows = [
-    (f"#{i}", v["name"], f"sigma={v['std_dev']:.2f}", f"mean_delta={v['mean_delta']:.2f}",
+    (f"#{i}", v["name"], f"&sigma;={v['std_dev']:.2f}", f"mean|&Delta;|={v['mean_delta']:.2f}",
      "converging" if v["converging"] else "diverging")
     for i, v in enumerate(volatility[:8], 1)
 ]
 vol_table = html_model_table(vol_rows, ["#", "Model", "Score sigma", "Mean delta", "Trend"])
 
-tenure_rows = [
-    (model_name.get(m, m), str(n), f"{n*2}h")
-    for m, n in top_tenures
-]
+tenure_rows = [(model_name.get(m, m), str(n), f"{n*2}h") for m, n in top_tenures]
 tenure_table = html_model_table(tenure_rows, ["Model", "Snapshots at #1", "Hours"])
 
 div_rows = [
@@ -352,16 +348,10 @@ div_rows = [
 ]
 div_table = html_model_table(div_rows, ["Model", "Overall Rank", "Coding Rank", "Delta", "Direction"])
 
-score_rows = [
-    (f"#{rk}", nm, f"{sc:.1f}")
-    for sc, rk, nm in latest_scores[:15]
-]
+score_rows = [(f"#{rk}", nm, f"{sc:.1f}") for sc, rk, nm in latest_scores[:15]]
 score_table = html_model_table(score_rows, ["Rank", "Model", "Score"])
 
-gap_rows = [
-    (f"#{rk}->{rk+1}", m1[:28], m2[:28], f"{g:.1f}")
-    for g, m1, m2, rk in tier_gaps
-]
+gap_rows = [(f"#{rk}->{rk+1}", m1[:28], m2[:28], f"{g:.1f}") for g, m1, m2, rk in tier_gaps]
 gap_table = html_model_table(gap_rows, ["Positions", "Upper model", "Lower model", "Gap"])
 
 if m_total:
@@ -373,22 +363,19 @@ if m_total:
     <tr>
       <td style='padding:4px 10px 4px 0;'>Continue improving</td>
       <td style='width:200px;background:#eee;padding:0;'>
-        <div style='background:#2a7;width:{cont_pct:.0f}%;height:16px;'></div>
-      </td>
+        <div style='background:#2a7;width:{cont_pct:.0f}%;height:16px;'></div></td>
       <td style='padding:4px 0 4px 8px;'>{m_continue} ({cont_pct:.1f}%)</td>
     </tr>
     <tr>
       <td style='padding:4px 10px 4px 0;'>Reverse (worsen)</td>
       <td style='width:200px;background:#eee;padding:0;'>
-        <div style='background:#c44;width:{rev_pct:.0f}%;height:16px;'></div>
-      </td>
+        <div style='background:#c44;width:{rev_pct:.0f}%;height:16px;'></div></td>
       <td style='padding:4px 0 4px 8px;'>{m_reverse} ({rev_pct:.1f}%)</td>
     </tr>
     <tr>
       <td style='padding:4px 10px 4px 0;'>Flat</td>
       <td style='width:200px;background:#eee;padding:0;'>
-        <div style='background:#aaa;width:{flat_pct_:.0f}%;height:16px;'></div>
-      </td>
+        <div style='background:#aaa;width:{flat_pct_:.0f}%;height:16px;'></div></td>
       <td style='padding:4px 0 4px 8px;'>{m_flat} ({flat_pct_:.1f}%)</td>
     </tr>
     </table>
@@ -397,60 +384,57 @@ if m_total:
 else:
     momentum_html = "<p>Insufficient data for momentum analysis.</p>"
 
-dow_html = ""
+dow_html_content = ""
 if dow_avg:
     max_dv = max(dow_avg.values())
-    dow_html = "<table style='border-collapse:collapse;font-size:13px;'>"
+    dow_html_content = "<table style='border-collapse:collapse;font-size:13px;'>"
     for d in range(7):
         if d in dow_avg:
             pct = dow_avg[d] / max_dv * 100
-            dow_html += (
+            dow_html_content += (
                 f"<tr><td style='padding:2px 8px 2px 0;width:40px;'>{days_labels[d]}</td>"
                 f"<td style='width:180px;background:#eee;padding:0;'>"
                 f"<div style='background:#5599ff;width:{pct:.0f}%;height:14px;'></div></td>"
                 f"<td style='padding:2px 0 2px 8px;'>{dow_avg[d]:.0f} votes/snap</td></tr>"
             )
-    dow_html += "</table>"
+    dow_html_content += "</table>"
 
 ci_direction = "positive" if ci_corr > 0 else "negative"
 ci_strength  = "strong" if abs(ci_corr) > 0.3 else ("moderate" if abs(ci_corr) > 0.15 else "weak")
+ci_ratio     = wide_avg / max(0.01, narrow_avg)
 
-nm_html = ""
+nm_html_content = ""
 if new_model_trajectories:
-    nm_html = "<ul style='font-size:13px;line-height:1.8;'>"
+    nm_html_content = "<ul style='font-size:13px;line-height:1.8;'>"
     for nm, traj in list(new_model_trajectories.items())[:6]:
-        nm_html += f"<li><strong>{nm}</strong> -- entry rank #{traj[0]}, trajectory: {' -> '.join(str(r) for r in traj[:8])}</li>"
-    nm_html += "</ul>"
+        nm_html_content += f"<li><strong>{nm}</strong> &mdash; entry rank #{traj[0]}, trajectory: {' &rarr; '.join(str(r) for r in traj[:8])}</li>"
+    nm_html_content += "</ul>"
 else:
-    nm_html = "<p>No new models with sufficient data.</p>"
-
-ci_ratio  = wide_avg / max(0.01, narrow_avg)
-vol_range = (volatility[0]["std_dev"] - volatility[-1]["std_dev"]) if len(volatility) > 1 else 0
+    nm_html_content = "<p>No new models with sufficient data.</p>"
 
 pattern_spotlight = f"""
-<p>
-<strong>The most actionable pattern is the CI-as-leading-indicator signal.</strong>
-</p>
+<p><strong>The most actionable pattern is the CI-as-leading-indicator signal.</strong></p>
 <p>
 Models with a wide confidence interval (&gt;15 points) move an average of
 <strong>{wide_avg:.2f} rank positions</strong> in the next snapshot, while
-narrow-CI models move only <strong>{narrow_avg:.2f}</strong> -- a
-<strong>{ci_ratio:.1f}x difference</strong>.
+narrow-CI models move only <strong>{narrow_avg:.2f}</strong> &mdash; a
+<strong>{ci_ratio:.1f}&times; difference</strong>.
 The Pearson correlation between CI width and next-snapshot absolute rank
-change is <strong>r = {ci_corr:.3f}</strong> ({ci_strength} {ci_direction} relationship,
-n = {len(pairs_ci):,} observation pairs).
+change is <strong>r&nbsp;=&nbsp;{ci_corr:.3f}</strong> ({ci_strength} {ci_direction} relationship,
+n&nbsp;=&nbsp;{len(pairs_ci):,} observation pairs).
 </p>
 <p>
 This means CI width is a <em>leading indicator</em> of upcoming rank instability,
-not just a measure of current uncertainty. Before a model's rank moves, its CI
-tends to widen -- possibly because it is gaining votes faster than the leaderboard's
+not just a measure of current uncertainty. Before a model&apos;s rank moves, its CI
+tends to widen &mdash; possibly because it is gaining votes faster than the leaderboard&apos;s
 smoothing window can absorb. A trader watching CI expansion can pre-position
 <em>before</em> the rank change is visible.
 </p>
 <p>
 Complementary finding: after three consecutive rank improvements (momentum),
 models continue improving <strong>{momentum_pct:.1f}%</strong> of the time vs.
-reversing {100*m_reverse/max(1,m_total):.1f}% -- {'a meaningful momentum signal' if momentum_pct > 55 else 'essentially coin-flip, so momentum alone is not reliable'}.
+reversing {100*m_reverse/max(1,m_total):.1f}% &mdash;
+{'a meaningful momentum signal' if momentum_pct > 55 else 'essentially coin-flip, so momentum alone is not reliable'}.
 This makes CI expansion the more trustworthy pre-signal.
 </p>
 """
@@ -459,11 +443,11 @@ feature_suggestion = f"""
 <h3 style='color:#1a5276;'>Feature: CI Expansion Alert (Widening Window)</h3>
 
 <p><strong>What it computes:</strong> For each model in the top 30, compare the current
-snapshot's <code>score_ci</code> against its rolling 5-snapshot average CI. If the
-current CI exceeds the rolling average by more than 1.5x, flag the model as
-"CI Expanding." Overlay this flag on the rank timeline chart.</p>
+snapshot&apos;s <code>score_ci</code> against its rolling 5-snapshot average CI. If the
+current CI exceeds the rolling average by more than 1.5&times;, flag the model as
+&ldquo;CI Expanding.&rdquo; Overlay this flag on the rank timeline chart.</p>
 
-<p><strong>SQL / Python logic:</strong></p>
+<p><strong>SQL logic:</strong></p>
 <pre style='background:#f4f4f4;padding:12px;border-radius:4px;font-size:12px;overflow-x:auto;'>
 WITH ci_history AS (
   SELECT
@@ -488,26 +472,23 @@ SELECT
   ci_rolling_avg,
   score_ci / NULLIF(ci_rolling_avg, 0) AS ci_expansion_ratio
 FROM ci_history
-WHERE score_ci / NULLIF(ci_rolling_avg, 0) > 1.5
+WHERE score_ci / NULLIF(ci_rolling_avg, 0) &gt; 1.5
 ORDER BY scraped_at DESC;
 </pre>
 
 <p><strong>How a trader uses it (specific scenario):</strong></p>
 <ol>
-  <li>Trader has a prediction market position that Model X stays in top 5 for
-  the next 24 hours.</li>
-  <li>At the 8 PM snapshot, the Widening Window alert fires on Model X --
-  its CI jumped from 12 to 22, a 1.8x expansion.</li>
-  <li>Historical data shows that when CI expands >1.5x for a top-10 model,
-  there is a {100*(wide_avg/max(0.01,narrow_avg)):.0f}% greater probability of a
-  rank change of 2 or more positions in the next 2-4 snapshots.</li>
-  <li>Trader reduces or hedges their position before the rank move is visible.</li>
+  <li>Trader holds a prediction market position that Model X stays in top 5 for the next 24 hours.</li>
+  <li>At the 8 PM snapshot, the Widening Window alert fires on Model X &mdash;
+      its CI jumped from 12 to 22, a 1.8&times; expansion.</li>
+  <li>Historical data shows that when CI expands &gt;1.5&times; for a top-10 model,
+      there is a {ci_ratio:.0f}&times; greater average rank movement in the next 2&ndash;4 snapshots.</li>
+  <li>Trader reduces or hedges their position before the rank move is visible in raw rankings.</li>
 </ol>
 
-<p><strong>Prediction signal:</strong> CI expansion is a ~2-6 hour leading indicator of
-rank instability. Because it fires <em>before</em> the rank number changes, it
-gives prediction-market traders a meaningful edge window that the raw leaderboard
-does not expose.</p>
+<p><strong>Prediction signal:</strong> CI expansion is a ~2&ndash;6 hour leading indicator of
+rank instability. Because it fires <em>before</em> the rank number changes, it gives
+prediction-market traders a meaningful edge window that the raw leaderboard does not expose.</p>
 """
 
 html_content = f"""<!DOCTYPE html>
@@ -530,7 +511,7 @@ html_content = f"""<!DOCTYPE html>
 </style></head>
 <body>
 
-<h1>Arena.ai Leaderboard -- Data Analysis Report</h1>
+<h1>Arena.ai Leaderboard &mdash; Data Analysis Report</h1>
 <span class="badge">Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</span>
 <p style='color:#666;font-size:13px;'>
   Dataset: {n_snapshots} successful snapshots &nbsp;&#183;&nbsp;
@@ -544,9 +525,9 @@ html_content = f"""<!DOCTYPE html>
 <p>Top-8 most volatile models (score std dev, at least 10 snapshots):</p>
 {vol_table}
 <div class="card">
-<strong>Convergence check:</strong> Most models show declining volatility in their
-second half of observations -- the leaderboard is gradually settling as vote counts
-grow and the Elo-like system converges.
+<strong>Convergence check:</strong> Models marked &ldquo;converging&rdquo; show lower score std dev
+in the second half of their history than the first &mdash; the leaderboard is gradually
+settling as vote counts grow and the Elo-like system stabilises.
 </div>
 
 <h2>2. Rank Stability at #1</h2>
@@ -556,44 +537,43 @@ grow and the Elo-like system converges.
 </p>
 {tenure_table}
 
-<h2>3. Vote Velocity -- Time Patterns</h2>
-{"<p>Peak UTC hour: <strong>" + str(peak_hour) + ":00</strong> (" + f"{hourly_avg[peak_hour]:.0f}" + " votes/snapshot avg) -- " + f"{hourly_avg[peak_hour]/max(1,hourly_avg[slow_hour]):.1f}" + "x more than the slowest hour.</p>" if peak_hour is not None else "<p>Insufficient data.</p>"}
-{dow_html}
+<h2>3. Vote Velocity &mdash; Time Patterns</h2>
+{"<p>Peak UTC hour: <strong>" + str(peak_hour) + ":00</strong> (" + f"{hourly_avg[peak_hour]:.0f}" + " votes/snapshot avg) &mdash; " + f"{hourly_avg[peak_hour]/max(1,hourly_avg[slow_hour]):.1f}" + "&times; more than the slowest hour (" + str(slow_hour) + ":00).</p>" if peak_hour is not None else "<p>Insufficient data.</p>"}
+{dow_html_content}
 <div class="card">
-Vote surges at certain hours may reflect when large user cohorts (US afternoon,
-EU morning) are most active on Arena.ai. Rank changes following high-vote windows
-are more likely to stick.
+Vote surges at certain hours reflect when large user cohorts (US afternoon, EU morning)
+are most active on Arena.ai. Rank changes following high-vote windows are more likely to stick.
 </div>
 
 <h2>4. CI Width as a Leading Indicator</h2>
 <div class="alert">
 <strong>Key finding:</strong>
 Wide-CI models (&gt;15) move <strong>{wide_avg:.2f} rank positions</strong> on average
-in the next snapshot vs. <strong>{narrow_avg:.2f}</strong> for narrow-CI models --
-a <strong>{ci_ratio:.1f}x difference</strong>.
-Pearson r = <strong>{ci_corr:.3f}</strong> (n = {len(pairs_ci):,} pairs).
+in the next snapshot vs. <strong>{narrow_avg:.2f}</strong> for narrow-CI models &mdash;
+a <strong>{ci_ratio:.1f}&times; difference</strong>.
+Pearson r&nbsp;=&nbsp;<strong>{ci_corr:.3f}</strong> (n&nbsp;=&nbsp;{len(pairs_ci):,} pairs).
 </div>
 <p>
-This is the strongest quantitative signal in the dataset: a model's CI width
+This is the strongest quantitative signal in the dataset: a model&apos;s CI width
 predicts its upcoming rank instability before the rank number changes.
 </p>
 
 <h2>5. New Model Trajectories</h2>
-{nm_html}
+{nm_html_content}
 
 <h2>6. Overall vs Coding Divergence</h2>
 <p>Models with the largest rank difference between leaderboards:</p>
 {div_table}
 
 <h2>7. Score Gap / Tier Clustering</h2>
-<p>Latest snapshot -- top 15:</p>
+<p>Latest snapshot &mdash; top 15:</p>
 {score_table}
 <p>Largest score gaps (potential tier boundaries):</p>
 {gap_table}
 <div class="card">
-Models sitting just below a tier boundary (large gap above) face lower rank-change
-risk; models just above a large gap below them are similarly entrenched.
-Models caught between two small gaps are most susceptible to rank swaps.
+Models sitting just below a large gap above them face lower rank-change risk;
+models just above a large gap below are similarly entrenched.
+Models caught between two small gaps are most susceptible to position swaps.
 </div>
 
 <h2>8. Rank Momentum</h2>
@@ -636,7 +616,7 @@ resend.api_key = os.environ["RESEND_API_KEY"]
 resp = resend.Emails.send({
     "from":    "onboarding@resend.dev",
     "to":      ["shyamvora91@gmail.com"],
-    "subject": "Arena Tracker -- Daily Data Analysis & Feature Suggestion",
+    "subject": "Arena Tracker &mdash; Daily Data Analysis & Feature Suggestion",
     "html":    html_content,
 })
 print(f"\nEmail sent: {resp}")
