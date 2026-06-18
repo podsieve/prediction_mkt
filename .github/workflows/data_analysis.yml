@@ -1,9 +1,10 @@
 name: Data Analysis & Email Report
 
 on:
+  # Daily schedule removed — this report was not useful enough to send every
+  # day (Arena's data only changes ~weekly). Kept as manual-only; trigger via
+  # the Actions tab if you ever want an ad-hoc run.
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *'  # 6 AM UTC daily
 
 jobs:
   analyze:
