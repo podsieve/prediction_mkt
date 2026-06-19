@@ -1,6 +1,6 @@
 # Arena.ai Leaderboard Tracker
 
-A Python-based system that scrapes the [Arena.ai text leaderboard](https://arena.ai/leaderboard/text/overall-no-style-control) every 6 hours, stores historical snapshots in Supabase Postgres, and provides analysis tools for tracking model performance trajectories.
+A Python-based system that scrapes the [Arena.ai text leaderboard](https://arena.ai/leaderboard/text/overall-no-style-control) on a weekly Thursday-dense schedule, stores historical snapshots in Supabase Postgres, and provides analysis tools for tracking model performance trajectories.
 
 ## What It Does
 
@@ -56,7 +56,7 @@ A Python-based system that scrapes the [Arena.ai text leaderboard](https://arena
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ GitHub Actions (every 6h)                                   │
+│ GitHub Actions (weekly Thursday-dense schedule)              │
 └──────────────────┬──────────────────────────────────────────┘
                    │
                    ▼
@@ -142,6 +142,12 @@ Key functions:
 - `first_seen_models()` — New arrivals in last N days
 - `anomaly_detection()` — Flags snapshots where score moved >2× CI
 
+### `analysis/studies.py`
+Ad-hoc research studies for deeper analysis (manual-only, not scheduled).
+
+### `analysis/refresh_cadence.py`
+Detects Arena.ai's underlying data-refresh cadence by finding snapshots where data genuinely changed and measuring the interval distribution.
+
 ### `analysis/trajectory.py`
 Launch trajectory analysis for new models.
 
@@ -217,7 +223,7 @@ WHERE first_seen_at > now() - interval '7 days'
 
 File: `.github/workflows/scrape.yml`
 
-- **Schedule:** Every 6 hours (0, 6, 12, 18 UTC)
+- **Schedule:** Daily at 12:00 UTC on non-Thursday days; dense window around Thursday (Wed 23:00 + Thu 00:00–14:00 hourly) to catch Arena's weekly refresh
 - **Manual trigger:** Workflow dispatch with optional reason
 - **Environment:** Ubuntu latest, Python 3.12
 - **Dependencies:** pip cache
@@ -246,7 +252,7 @@ File: `.github/workflows/scrape.yml`
 
 ## Data Flow Example
 
-1. **GitHub Actions** triggers at 6h interval
+1. **GitHub Actions** triggers on weekly Thursday-dense schedule
 2. **scraper.py** fetches HTML from arena.ai (with retries)
 3. **parser.py** extracts 357 models, 6.1M votes, 6 parse errors logged
 4. **db.py**:
