@@ -13,6 +13,7 @@ from src.parser import (
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 OVERALL_FIXTURE = os.path.join(FIXTURE_DIR, "sample_leaderboard.html")
 CODING_FIXTURE = os.path.join(FIXTURE_DIR, "sample_coding_leaderboard.html")
+MATH_FIXTURE = os.path.join(FIXTURE_DIR, "sample_math_leaderboard.html")
 
 
 # --- Fixtures ---
@@ -42,6 +43,21 @@ def coding_result(coding_html):
         coding_html,
         "https://arena.ai/leaderboard/text/coding-no-style-control",
         category="coding",
+    )
+
+
+@pytest.fixture
+def math_html():
+    with open(MATH_FIXTURE, "r") as f:
+        return f.read()
+
+
+@pytest.fixture
+def math_result(math_html):
+    return parse_leaderboard(
+        math_html,
+        "https://arena.ai/leaderboard/text/math-no-style-control",
+        category="math",
     )
 
 
@@ -178,6 +194,52 @@ class TestParseCodingLeaderboard:
         assert len(orgs) > 0
 
 
+# --- Math leaderboard ---
+
+class TestParseMathLeaderboard:
+    def test_category_is_math(self, math_result):
+        assert math_result.category == "math"
+
+    def test_source_url(self, math_result):
+        assert "math" in math_result.source_url
+
+    def test_parses_models(self, math_result):
+        assert math_result.total_models > 100
+
+    def test_total_votes(self, math_result):
+        assert math_result.total_votes is not None
+        assert math_result.total_votes > 0
+
+    def test_first_model_rank(self, math_result):
+        assert math_result.models[0].rank == 1
+
+    def test_first_model_has_score(self, math_result):
+        assert math_result.models[0].score > 1000
+
+    def test_first_model_has_votes(self, math_result):
+        assert math_result.models[0].votes > 0
+
+    def test_ranks_are_sequential(self, math_result):
+        ranks = [m.rank for m in math_result.models]
+        assert ranks == list(range(1, len(ranks) + 1))
+
+    def test_all_scores_positive(self, math_result):
+        for m in math_result.models:
+            assert m.score > 0
+
+    def test_last_model_lower_score(self, math_result):
+        assert math_result.models[-1].score < math_result.models[0].score
+
+    def test_has_html_hash(self, math_result):
+        assert len(math_result.raw_html_hash) == 64
+
+    def test_organization_parsed_for_top(self, math_result):
+        """At least some top models should have an organization."""
+        top_10 = math_result.models[:10]
+        orgs = [m.organization for m in top_10 if m.organization]
+        assert len(orgs) > 0
+
+
 # --- Shared model identity ---
 
 class TestCrossCategory:
@@ -188,8 +250,18 @@ class TestCrossCategory:
         overlap = overall_names & coding_names
         assert len(overlap) > 10, "Expected significant overlap between overall and coding models"
 
+    def test_math_overlaps_overall(self, scrape_result, math_result):
+        """Some models should appear in both overall and math leaderboards."""
+        overall_names = {m.model_name for m in scrape_result.models}
+        math_names = {m.model_name for m in math_result.models}
+        overlap = overall_names & math_names
+        assert len(overlap) > 10, "Expected significant overlap between overall and math models"
+
     def test_categories_differ(self, scrape_result, coding_result):
         assert scrape_result.category != coding_result.category
+
+    def test_math_category_differs(self, scrape_result, math_result):
+        assert scrape_result.category != math_result.category
 
     def test_different_vote_counts(self, scrape_result, coding_result):
         """Coding and overall should have different total vote counts."""

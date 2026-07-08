@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 CATEGORY_LABELS = {
     "overall": "Overall",
     "coding": "Coding",
+    "math": "Math",
 }
 
 

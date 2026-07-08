@@ -197,6 +197,7 @@ def get_all_model_names(category: str):
 CATEGORY_LABELS = {
     "overall": "Overall",
     "coding": "Coding",
+    "math": "Math",
 }
 
 categories = get_categories()

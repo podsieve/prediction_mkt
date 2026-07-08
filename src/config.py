@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings
 DEFAULT_SCRAPE_CATEGORIES: Dict[str, str] = {
     "overall": "https://arena.ai/leaderboard/text/overall-no-style-control",
     "coding": "https://arena.ai/leaderboard/text/coding-no-style-control",
+    "math": "https://arena.ai/leaderboard/text/math-no-style-control",
 }
 
 
