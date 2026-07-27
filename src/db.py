@@ -12,8 +12,37 @@ from src.models import ScrapedModel, ScrapeResult
 logger = logging.getLogger(__name__)
 
 
+class SuspiciousScrapeError(Exception):
+    """Raised when a parsed result looks like a parser regression, not real data."""
+
+
 def get_client():
     return create_client(settings.supabase_url, settings.supabase_key)
+
+
+def check_new_model_surge(new_models: List[Dict], known_model_count: int, category: str):
+    """Abort a scrape that would mint an implausible number of new models.
+
+    A layout change on Arena's side can make the parser read garbage as model
+    names, and every garbage name looks like a brand-new model. Inserting them
+    is close to irreversible — it splits each real model's history across two
+    IDs and fires a new-model alert for each. Bailing out costs one snapshot.
+    """
+    if known_model_count < 50:
+        # Bootstrap: the table is empty or nearly so, every model is legitimately new.
+        return
+
+    limit = settings.max_new_models_per_scrape
+    if len(new_models) <= limit:
+        return
+
+    sample = [m["canonical_name"] for m in new_models[:5]]
+    raise SuspiciousScrapeError(
+        f"[{category}] scrape wants to create {len(new_models)} new models "
+        f"(limit {limit}) against {known_model_count} known — refusing to store. "
+        f"This usually means Arena changed its HTML and src/parser.py is reading "
+        f"garbage names. Sample: {sample}"
+    )
 
 
 def load_caches(client):
@@ -122,21 +151,6 @@ def store_results(scrape_result: ScrapeResult):
     now = scrape_result.scraped_at.isoformat()
     category = scrape_result.category
 
-    snapshot = client.table("snapshots").insert(
-        {
-            "scraped_at": now,
-            "source_url": scrape_result.source_url,
-            "category": category,
-            "total_models": scrape_result.total_models,
-            "total_votes": scrape_result.total_votes,
-            "scrape_duration_ms": scrape_result.scrape_duration_ms,
-            "status": "success",
-            "raw_html_hash": scrape_result.raw_html_hash,
-        }
-    ).execute()
-    snapshot_id = snapshot.data[0]["id"]
-    logger.info("[%s] Created snapshot %s", category, snapshot_id)
-
     model_cache, alias_cache = load_caches(client)
 
     # Identify new models that need inserting
@@ -152,6 +166,25 @@ def store_results(scrape_result: ScrapeResult):
                 "last_seen_at": now,
                 "is_active": True,
             })
+
+    # Sanity-check before writing anything — a bad parse should cost us one
+    # snapshot, not pollute `models` with phantoms we then have to merge away.
+    check_new_model_surge(new_models, len(model_cache), category)
+
+    snapshot = client.table("snapshots").insert(
+        {
+            "scraped_at": now,
+            "source_url": scrape_result.source_url,
+            "category": category,
+            "total_models": scrape_result.total_models,
+            "total_votes": scrape_result.total_votes,
+            "scrape_duration_ms": scrape_result.scrape_duration_ms,
+            "status": "success",
+            "raw_html_hash": scrape_result.raw_html_hash,
+        }
+    ).execute()
+    snapshot_id = snapshot.data[0]["id"]
+    logger.info("[%s] Created snapshot %s", category, snapshot_id)
 
     if new_models:
         model_cache = bulk_insert_new_models(client, new_models, model_cache)

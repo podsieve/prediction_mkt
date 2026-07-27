@@ -2,17 +2,11 @@ name: Scrape Arena Leaderboard
 
 on:
   schedule:
-    # Arena refreshes its leaderboard only ~weekly, landing Thursday around
-    # 03:00-14:00 UTC (Wed night US). ~94% of more frequent scrapes are exact
-    # duplicates, so we scrape lightly most days and densely around Thursday.
-    #
-    # Baseline: once daily at 12:00 UTC on non-Thursday days (catches the rare
-    # mid-week touch-up).
-    - cron: '0 12 * * 0,1,2,3,5,6'
-    # Dense window around the weekly Thursday refresh: Wednesday night plus
-    # hourly across Thursday morning/midday UTC.
-    - cron: '0 23 * * 3'
-    - cron: '0 0-14 * * 4'
+    # Every 2 hours. Arena refreshes roughly weekly, so most runs are exact
+    # duplicates, but a uniform grid pins each refresh to a <=2h window without
+    # betting on the day-of-week pattern holding (the Thursday clustering we
+    # saw in June decayed by late July).
+    - cron: '0 */2 * * *'
   workflow_dispatch:
     inputs:
       reason:

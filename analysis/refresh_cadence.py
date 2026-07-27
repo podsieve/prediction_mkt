@@ -41,7 +41,10 @@ def _fetch_all(client, table: str, columns: str, page_size: int = 1000) -> List[
     rows: List[dict] = []
     start = 0
     while True:
-        resp = (client.table(table).select(columns)
+        # .order("id") is required, not cosmetic: without a stable sort Postgres
+        # may return rows in a different order per page, so paging with .range()
+        # silently duplicates some rows and drops others.
+        resp = (client.table(table).select(columns).order("id")
                 .range(start, start + page_size - 1).execute())
         batch = resp.data or []
         rows.extend(batch)

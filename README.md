@@ -1,6 +1,6 @@
 # Arena.ai Leaderboard Tracker
 
-A Python-based system that scrapes the [Arena.ai text leaderboard](https://arena.ai/leaderboard/text/overall-no-style-control) on a weekly Thursday-dense schedule, stores historical snapshots in Supabase Postgres, and provides analysis tools for tracking model performance trajectories.
+A Python-based system that scrapes the [Arena.ai text leaderboard](https://arena.ai/leaderboard/text/overall-no-style-control) every 2 hours, stores historical snapshots in Supabase Postgres, and provides analysis tools for tracking model performance trajectories.
 
 ## What It Does
 
@@ -56,7 +56,7 @@ A Python-based system that scrapes the [Arena.ai text leaderboard](https://arena
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ GitHub Actions (weekly Thursday-dense schedule)              │
+│ GitHub Actions (cron: 0 */2 * * *)                           │
 └──────────────────┬──────────────────────────────────────────┘
                    │
                    ▼
@@ -162,6 +162,18 @@ python scripts/merge_models.py "old-name" "real-name"
 ```
 Moves all rankings from old→real, adds old as alias, deletes old row.
 
+### `scripts/cleanup_garbage_models.py`
+One-off repair for the July 2026 parser regression (see *Guarding against parser
+regressions*). Reconstructs each phantom model's real name from its
+`organization`/`license_type` columns, merges the rankings back onto the real
+model, and deletes the phantom row. Dry run by default:
+```bash
+python scripts/cleanup_garbage_models.py           # show the plan
+python scripts/cleanup_garbage_models.py --apply   # execute
+```
+Already applied on 2026-07-27 (377 phantoms merged, 25,348 rankings moved). It is
+idempotent — a re-run on a clean database reports nothing to do.
+
 ## Database Schema
 
 ### `models`
@@ -223,7 +235,7 @@ WHERE first_seen_at > now() - interval '7 days'
 
 File: `.github/workflows/scrape.yml`
 
-- **Schedule:** Daily at 12:00 UTC on non-Thursday days; dense window around Thursday (Wed 23:00 + Thu 00:00–14:00 hourly) to catch Arena's weekly refresh
+- **Schedule:** Every 2 hours (`0 */2 * * *`). Arena refreshes roughly weekly, so most runs are duplicates; the uniform grid pins each refresh to a ≤2h window without relying on a day-of-week pattern
 - **Manual trigger:** Workflow dispatch with optional reason
 - **Environment:** Ubuntu latest, Python 3.12
 - **Dependencies:** pip cache
@@ -249,10 +261,47 @@ File: `.github/workflows/scrape.yml`
 - Model aliasing prevents duplicates after renames
 - Missing models marked inactive when not found in snapshot
 - Bulk inserts in batches of 100 (avoids timeouts)
+- `check_new_model_surge()` aborts the whole snapshot if a scrape would create
+  more than `max_new_models_per_scrape` (default 25) models at once
+
+### Guarding against parser regressions
+Between 2026-07-09 and 2026-07-20 Arena rendered the model cell without its
+`<a title="...">` wrapper. The parser fell back to the whole cell's text, which
+concatenates the org logo's `<svg><title>`, the model name, and the
+`Org · License` caption with no separator:
+
+```
+claude-fable-5  ->  Anthropicclaude-fable-5Anthropic · Proprietary
+tulu-2-dpo-70b  ->  tulu-2-dpo-70bAI2 ImpACT Low-risk
+```
+
+Every mangled name looked like a brand-new model, so 377 phantom rows were
+created and each real model's history was split in two. Four layers now prevent
+a repeat:
+
+1. **Parse precisely** — `first_text()` skips `<svg>` subtrees so the org logo
+   can never prefix the name.
+2. **Repair and verify** — `strip_org_suffix()` peels a concatenated caption
+   back off using the org/license text, which is parsed independently and was
+   correct for 347/347 affected rows. If the caption still survives in the name,
+   `parse_model_cell()` raises and the row is dropped rather than stored.
+3. **Reject at the model boundary** — `ScrapedModel` refuses any name containing
+   `·`, a newline, or over 80 characters.
+4. **Circuit-break the write** — `check_new_model_surge()` refuses to store a
+   snapshot that wants to mint more than 25 new models. Arena's busiest real day
+   added 8; the regression tried to add 369. A blocked category records a failed
+   snapshot and the other categories still store normally.
+
+Layer 4 is the general net: it catches any future layout change regardless of
+what shape the bad names take.
+
+> **Note:** paginated Supabase reads must call `.order("id")` before `.range()`.
+> Without a stable sort, Postgres may return a different row order per page, so
+> paging silently duplicates some rows and drops others.
 
 ## Data Flow Example
 
-1. **GitHub Actions** triggers on weekly Thursday-dense schedule
+1. **GitHub Actions** triggers every 2 hours
 2. **scraper.py** fetches HTML from arena.ai (with retries)
 3. **parser.py** extracts 357 models, 6.1M votes, 6 parse errors logged
 4. **db.py**:

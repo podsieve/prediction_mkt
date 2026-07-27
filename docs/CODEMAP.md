@@ -12,7 +12,7 @@
 ## Architecture Diagram
 
 ```
-┌─ GitHub Actions (cron: 0 */6 * * *) ─────────────┐
+┌─ GitHub Actions (cron: 0 */2 * * *) ─────────────┐
 │                                                    │
 ├─ scraper.py ◀─ fetch_page() with Tenacity retries│
 │  ├─ parser.py ◀─ parse_leaderboard()             │
@@ -79,7 +79,7 @@
 
 | File | Purpose |
 |------|---------|
-| `.github/workflows/scrape.yml` | GitHub Actions workflow (6h cron, manual dispatch) |
+| `.github/workflows/scrape.yml` | GitHub Actions workflow (2h cron, manual dispatch) |
 
 ### Tests
 

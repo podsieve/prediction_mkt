@@ -47,9 +47,13 @@ def _fetch_all(client, table: str, columns: str, page_size: int = 1000) -> List[
     rows: List[dict] = []
     start = 0
     while True:
+        # .order("id") is load-bearing: unordered .range() paging lets Postgres
+        # return rows in a different order per page, which duplicates some rows
+        # and silently drops others.
         resp = (
             client.table(table)
             .select(columns)
+            .order("id")
             .range(start, start + page_size - 1)
             .execute()
         )

@@ -36,13 +36,67 @@ def parse_rank_spread(cell) -> Tuple[Optional[str], Optional[int], Optional[int]
     return None, None, None
 
 
-def parse_model_cell(cell) -> Tuple[str, Optional[str], Optional[str]]:
-    link = cell.find("a")
-    if link:
-        name = link.get("title") or link.get_text(strip=True)
-    else:
-        name = cell.get_text(strip=True).split("\n")[0].strip()
+def first_text(node) -> str:
+    """First non-empty text in `node`, ignoring anything inside an <svg>.
 
+    Arena renders the organization logo as an inline <svg> whose <title> holds
+    the org name, so a plain get_text() splices the org onto the front of the
+    model name. Skipping svg subtrees keeps the name clean.
+    """
+    for string in node.strings:
+        if string.find_parent("svg") is not None:
+            continue
+        text = string.strip()
+        if text:
+            return text
+    return ""
+
+
+def _strip_prefix(name: str, prefix: Optional[str]) -> str:
+    """Drop a leading org name, unless doing so would cut into the real name."""
+    if not prefix or len(name) <= len(prefix):
+        return name
+    if not name.lower().startswith(prefix.lower()):
+        return name
+    remainder = name[len(prefix):].strip()
+    # "RWKV-4-Raven-14B" legitimately starts with its org: a remainder opening
+    # on a separator means we sliced a real name, so leave it alone.
+    if not remainder or remainder[0] in "-_.":
+        return name
+    return remainder
+
+
+def strip_org_suffix(
+    name: str,
+    org_text: Optional[str],
+    organization: Optional[str],
+    license_type: Optional[str],
+    logo_title: Optional[str] = None,
+) -> str:
+    """Peel an accidentally-concatenated "Org · License" caption off a name.
+
+    When Arena renders the whole model cell as one flat text node, the name
+    arrives as e.g. "Anthropicclaude-fable-5Anthropic · Proprietary" — the logo
+    title, the name, then the caption, with no separators. Both affixes are
+    known here, so strip them back off rather than storing the mangled name.
+    """
+    stripped_suffix = False
+    for suffix in (org_text, license_type, organization):
+        if suffix and name != suffix and name.endswith(suffix):
+            name = name[: -len(suffix)].strip(" ·")
+            stripped_suffix = True
+
+    # The logo's <svg><title> is the exact text that leaks in front of the name,
+    # so strip it whenever we know it. The caption's org name is only a guess at
+    # the same thing (and can differ in case — "Stepfun" vs "StepFun"), so use it
+    # only once a stripped suffix has confirmed the cell really was concatenated.
+    name = _strip_prefix(name, logo_title)
+    if stripped_suffix:
+        name = _strip_prefix(name, organization)
+    return name
+
+
+def parse_model_cell(cell) -> Tuple[str, Optional[str], Optional[str]]:
     org_span = cell.find("span", class_=lambda c: c and "text-xs" in c)
     org_text = org_span.get_text(strip=True) if org_span else None
 
@@ -54,6 +108,29 @@ def parse_model_cell(cell) -> Tuple[str, Optional[str], Optional[str]]:
         license_type = parts[1].strip()
     elif org_text:
         organization = org_text
+
+    # The org logo is an <svg> whose <title> holds the org name — the exact text
+    # that gets glued to the front of the name when the cell layout collapses.
+    logo = cell.find("svg")
+    logo_title_tag = logo.find("title") if logo else None
+    logo_title = logo_title_tag.get_text(strip=True) if logo_title_tag else None
+
+    link = cell.find("a")
+    if link:
+        name = (link.get("title") or "").strip() or first_text(link)
+    else:
+        name = ""
+    if not name:
+        name = first_text(cell)
+
+    name = strip_org_suffix(name, org_text, organization, license_type, logo_title)
+
+    # If the caption is still embedded, the cell layout changed in a way we
+    # don't understand — fail the row loudly instead of minting a phantom model.
+    if org_text and org_text in name:
+        raise ValueError(
+            f"model name still contains the org caption {org_text!r}: {name!r}"
+        )
 
     return name, organization, license_type
 

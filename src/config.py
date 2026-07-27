@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     retry_delay: float = 5.0
     user_agent: str = "ArenaLeaderboardTracker/1.0"
 
+    # Refuse to store a snapshot that wants to create more than this many new
+    # models at once. Arena has never added more than 8 in a day; a July 2026
+    # parser regression tried to add 369 phantom models in one run. Bootstrap
+    # runs (an empty `models` table) bypass this.
+    max_new_models_per_scrape: int = 25
+
     resend_api_key: str = ""
     alert_recipient: str = "shyamvora91@gmail.com"
     alert_from_email: str = "onboarding@resend.dev"

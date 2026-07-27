@@ -93,23 +93,35 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    from src.db import store_results
+    from src.db import record_failed_scrape, store_results
 
     results = scrape_all()
     if not results:
         logger.error("All category scrapes failed")
         sys.exit(1)
 
+    stored = 0
     for result in results:
-        store_results(result)
+        # One category failing its sanity checks shouldn't stop the others.
+        try:
+            store_results(result)
+        except Exception as e:
+            logger.error("[%s] Refused to store scrape: %s", result.category, e)
+            record_failed_scrape(
+                str(e), category=result.category, source_url=result.source_url
+            )
+            continue
+        stored += 1
         logger.info(
             "[%s] Stored snapshot with %d models.",
             result.category,
             result.total_models,
         )
 
-    logger.info("Done. Scraped %d/%d categories successfully.",
-                len(results), len(settings.scrape_categories))
+    logger.info("Done. Stored %d/%d categories successfully.",
+                stored, len(settings.scrape_categories))
+    if not stored:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

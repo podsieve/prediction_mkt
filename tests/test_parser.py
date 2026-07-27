@@ -7,7 +7,9 @@ import pytest
 from src.parser import (
     parse_int,
     parse_leaderboard,
+    parse_model_cell,
     parse_total_votes,
+    strip_org_suffix,
 )
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -266,6 +268,167 @@ class TestCrossCategory:
     def test_different_vote_counts(self, scrape_result, coding_result):
         """Coding and overall should have different total vote counts."""
         assert scrape_result.total_votes != coding_result.total_votes
+
+
+# --- Regression: July 2026 concatenated model names ---
+
+def _cell(html: str):
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(html, "html.parser").find("td")
+
+
+# How Arena normally renders the cell: org logo <svg><title>, an <a title=...>
+# holding the name, then the "Org · License" caption.
+WELL_FORMED_CELL = """
+<td><div>
+  <svg><title>Anthropic</title><path></path></svg>
+  <a title="claude-fable-5" href="#"><span>claude-fable-5</span></a>
+  <span class="text-xs">Anthropic · Proprietary</span>
+</div></td>
+"""
+
+# The July 2026 shape: the <a> wrapper disappeared, so the logo title, name and
+# caption ran together into one blob of cell text.
+REGRESSION_CELL = """
+<td><div>
+  <svg><title>Anthropic</title><path></path></svg>
+  <span>claude-fable-5</span>
+  <span class="text-xs">Anthropic · Proprietary</span>
+</div></td>
+"""
+
+# Worst case: name, logo title and caption all collapsed into one text node.
+# The string here is copied verbatim from a row the old parser wrote to the
+# `models` table on 2026-07-09.
+FLATTENED_CELL = """
+<td><div>
+  <svg><title>Anthropic</title></svg>
+  Anthropicclaude-fable-5Anthropic · Proprietary
+  <span class="text-xs">Anthropic · Proprietary</span>
+</div></td>
+"""
+
+# Only the logo title leaked in; the caption stayed in its own span, so there is
+# no suffix to strip and the <svg><title> is the only thing that identifies it.
+LOGO_PREFIX_ONLY_CELL = """
+<td><div>
+  <svg><title>Anthropic</title></svg>
+  Anthropicclaude-fable-5
+  <span class="text-xs">Anthropic · Proprietary</span>
+</div></td>
+"""
+
+# A model with no organization — the caption is just the license.
+LICENSE_ONLY_CELL = """
+<td><div>yi-lightning<span class="text-xs">Proprietary</span></div></td>
+"""
+
+# A real name that legitimately starts with its own org name.
+ORG_PREFIXED_NAME_CELL = """
+<td><div>
+  <svg><title>RWKV</title></svg>
+  <a title="RWKV-4-Raven-14B" href="#"><span>RWKV-4-Raven-14B</span></a>
+  <span class="text-xs">RWKV · Apache 2.0</span>
+</div></td>
+"""
+
+
+class TestModelCellNameExtraction:
+    def test_well_formed_cell(self):
+        name, org, lic = parse_model_cell(_cell(WELL_FORMED_CELL))
+        assert name == "claude-fable-5"
+        assert org == "Anthropic"
+        assert lic == "Proprietary"
+
+    def test_missing_anchor_does_not_absorb_org_logo(self):
+        """The <svg><title>Anthropic</title> must not prefix the model name."""
+        name, org, lic = parse_model_cell(_cell(REGRESSION_CELL))
+        assert name == "claude-fable-5"
+        assert org == "Anthropic"
+
+    def test_flattened_cell_is_repaired(self):
+        name, org, lic = parse_model_cell(_cell(FLATTENED_CELL))
+        assert name == "claude-fable-5"
+
+    def test_logo_prefix_alone_is_stripped(self):
+        name, org, lic = parse_model_cell(_cell(LOGO_PREFIX_ONLY_CELL))
+        assert name == "claude-fable-5"
+
+    def test_license_only_caption_is_stripped(self):
+        name, org, lic = parse_model_cell(_cell(LICENSE_ONLY_CELL))
+        assert name == "yi-lightning"
+
+    def test_org_prefixed_name_is_preserved(self):
+        """RWKV-4-Raven-14B starts with its org but is not concatenated."""
+        name, org, lic = parse_model_cell(_cell(ORG_PREFIXED_NAME_CELL))
+        assert name == "RWKV-4-Raven-14B"
+
+    def test_no_parsed_name_keeps_the_org_caption(self):
+        """If the caption survives in the name, the row must fail loudly."""
+        cell = _cell(
+            '<td><div>Anthropic · Proprietary claude-fable-5'
+            '<span class="text-xs">Anthropic · Proprietary</span></div></td>'
+        )
+        with pytest.raises(ValueError, match="org caption"):
+            parse_model_cell(cell)
+
+
+class TestStripOrgSuffix:
+    @pytest.mark.parametrize("name,org_text,org,lic,expected", [
+        ("Anthropicclaude-fable-5Anthropic · Proprietary",
+         "Anthropic · Proprietary", "Anthropic", "Proprietary", "claude-fable-5"),
+        ("tulu-2-dpo-70bAI2 ImpACT Low-risk",
+         "AI2 ImpACT Low-risk", "AI2 ImpACT Low-risk", None, "tulu-2-dpo-70b"),
+        ("yi-lightningProprietary", "Proprietary", "Proprietary", None, "yi-lightning"),
+        # Logo <title> casing can differ from the caption's org name.
+        ("Stepfunstep-3StepFun · Apache 2.0",
+         "StepFun · Apache 2.0", "StepFun", "Apache 2.0", "step-3"),
+        # Untouched when nothing was concatenated.
+        ("RWKV-4-Raven-14B", "RWKV · Apache 2.0", "RWKV", "Apache 2.0", "RWKV-4-Raven-14B"),
+        ("claude-opus-4-6-thinking",
+         "Anthropic · Proprietary", "Anthropic", "Proprietary", "claude-opus-4-6-thinking"),
+    ])
+    def test_repairs(self, name, org_text, org, lic, expected):
+        assert strip_org_suffix(name, org_text, org, lic) == expected
+
+
+class TestModelNameValidation:
+    def test_rejects_org_separator(self):
+        from pydantic import ValidationError
+        from src.models import ScrapedModel
+        with pytest.raises(ValidationError):
+            ScrapedModel(
+                rank=1, model_name="claude-fable-5Anthropic · Proprietary",
+                score=1500.0, votes=100,
+            )
+
+    def test_rejects_overlong_name(self):
+        from pydantic import ValidationError
+        from src.models import ScrapedModel
+        with pytest.raises(ValidationError):
+            ScrapedModel(rank=1, model_name="x" * 200, score=1500.0, votes=100)
+
+    def test_accepts_real_name(self):
+        from src.models import ScrapedModel
+        m = ScrapedModel(
+            rank=1, model_name="claude-opus-4-1-20250805-thinking-16k",
+            score=1500.0, votes=100,
+        )
+        assert m.model_name == "claude-opus-4-1-20250805-thinking-16k"
+
+
+class TestNoConcatenatedNamesInFixtures:
+    """Whole-fixture guard: no parsed name may carry its org or license."""
+
+    @pytest.mark.parametrize("fixture", ["scrape_result", "coding_result", "math_result"])
+    def test_names_are_clean(self, fixture, request):
+        result = request.getfixturevalue(fixture)
+        for m in result.models:
+            assert "·" not in m.model_name
+            if m.organization:
+                assert not m.model_name.endswith(m.organization)
+            if m.license_type:
+                assert not m.model_name.endswith(m.license_type)
 
 
 # --- parse_total_votes ---
