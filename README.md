@@ -148,6 +148,25 @@ Ad-hoc research studies for deeper analysis (manual-only, not scheduled).
 ### `analysis/refresh_cadence.py`
 Detects Arena.ai's underlying data-refresh cadence by finding snapshots where data genuinely changed and measuring the interval distribution.
 
+### `analysis/aging.py`
+Debut-aligned rank/score curves — the data behind the dashboard's **Rank Decay** page.
+
+Aligns every model on day 0 = its own first appearance instead of the calendar, which is
+what makes trajectories comparable across models that launched months apart. It exists to
+answer one question: after a model launches, does it hold its position?
+
+Key functions:
+- `rank_decay(category)` — Full dataset for one category: curves, cohort start, censored count
+- `build_curves()` — Raw rankings → one debut-aligned curve per model, with deltas from debut
+- `step_interpolate()` — Samples a curve onto a shared day grid, last value carried forward
+  (step, not linear — a score holds until Arena's next recompute)
+- `median_curve()` — Median + interquartile band across curves, blank where fewer than 3 models
+
+**Only models that debuted after scraping began are usable.** Everything present in a
+category's first snapshot has a `first_seen_at` of the day the scraper started, not the day
+it launched, so including it would measure the collection window instead of the model. For
+`overall` that leaves 34 of 391 models; the page reports how many it excluded.
+
 ### `analysis/trajectory.py`
 Launch trajectory analysis for new models.
 
@@ -338,6 +357,32 @@ python scripts/merge_models.py "Claude Opus Preview" "Claude Opus"
 ```
 All rankings from preview→opus, adds preview as alias, deletes preview row.
 
+### Dashboard
+```bash
+streamlit run dashboard/app.py
+```
+Four pages, each honouring the sidebar category selector:
+
+| Page | Shows |
+|---|---|
+| Overview | Current full leaderboard + top-10 score lines over calendar time |
+| Model Detail | One model's rank, score (with CI band), votes, and CI tightening |
+| Rank Decay | Every model aligned on its own debut — see below |
+| New Models | Recent arrivals, with a lookback slider |
+
+**Rank Decay** is the one to reach for when asking *"do models hold their position after
+launch?"*. Two panels share a since-debut x-axis: rank change on top (axis inverted, so
+falling reads as falling), score change below. One step line per model, with a median and
+interquartile band over the top. Lines are stepped rather than smoothed because a score
+holds whatever Arena last published until the next recompute.
+
+The pattern it surfaces: **score stays roughly flat while rank decays** — models mostly
+don't get worse, the field improves around them. A second chart medians each debut-month
+cohort separately, which answers whether that decay is accelerating as the board fills up.
+
+Note the page charts only models that debuted after scraping began (34 of 391 for
+`overall`) and states how many it excluded — see `analysis/aging.py` for why.
+
 ## Conventions
 
 - **Parser resilience:** Finds columns by header text, not CSS classes
@@ -375,7 +420,6 @@ Use bulk inserts (batches of 100) and .limit(1) instead of .maybe_single() quirk
 
 - **Alerts:** Slack notifications for anomalies (score jump >3× CI)
 - **API endpoint:** FastAPI to serve latest rankings and trajectories
-- **Dashboard:** Streamlit frontend for interactive model analysis
 - **Forecast:** ARIMA on vote velocity to predict model saturation
 - **Clustering:** Group similar models by score, org, license
 
