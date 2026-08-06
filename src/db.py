@@ -45,6 +45,36 @@ def check_new_model_surge(new_models: List[Dict], known_model_count: int, catego
     )
 
 
+def dedupe_scraped_models(models: List[ScrapedModel], category: str) -> List[ScrapedModel]:
+    """Drop repeat listings of the same model, keeping the best-ranked one.
+
+    Arena occasionally lists one model twice with slightly different scores —
+    on 2026-08-03 `gemini-3.5-flash-high` appeared at both rank 9 and rank 11
+    with byte-identical model cells. `rankings` has a unique (snapshot_id,
+    model_id) constraint, so storing both is impossible; the rows arrive in
+    rank order, so the first occurrence is the one to keep.
+    """
+    seen: Set[str] = set()
+    unique: List[ScrapedModel] = []
+    dropped: List[str] = []
+    for model in models:
+        if model.model_name in seen:
+            dropped.append(f"{model.model_name} (rank {model.rank})")
+            continue
+        seen.add(model.model_name)
+        unique.append(model)
+
+    if dropped:
+        logger.warning(
+            "[%s] Arena listed %d model(s) more than once; kept the best-ranked "
+            "row and dropped: %s",
+            category,
+            len(dropped),
+            ", ".join(dropped),
+        )
+    return unique
+
+
 def load_caches(client):
     """Preload all models and aliases into memory to avoid per-model HTTP calls."""
     model_cache = {}
@@ -146,16 +176,34 @@ def mark_inactive_models(client, seen_model_ids: Set[str], now: str, category: s
         )
 
 
-def store_results(scrape_result: ScrapeResult):
+def rollback_snapshot(client, snapshot_id: str, category: str):
+    """Remove a half-written snapshot so it can't be mistaken for real data."""
+    try:
+        client.table("rankings").delete().eq("snapshot_id", snapshot_id).execute()
+        client.table("snapshots").delete().eq("id", snapshot_id).execute()
+        logger.info("[%s] Rolled back snapshot %s", category, snapshot_id)
+    except Exception as e:
+        logger.error(
+            "[%s] Could not roll back snapshot %s — it may be left with partial "
+            "rankings: %s", category, snapshot_id, e,
+        )
+
+
+def store_results(scrape_result: ScrapeResult) -> int:
+    """Store one category's scrape. Returns the number of rankings written."""
     client = get_client()
     now = scrape_result.scraped_at.isoformat()
     category = scrape_result.category
 
     model_cache, alias_cache = load_caches(client)
 
+    # A model listed twice can't be stored twice — the unique (snapshot_id,
+    # model_id) constraint would reject the whole batch and cost us the scrape.
+    scraped_models = dedupe_scraped_models(scrape_result.models, category)
+
     # Identify new models that need inserting
     new_models = []
-    for scraped_model in scrape_result.models:
+    for scraped_model in scraped_models:
         name = scraped_model.model_name
         if name not in model_cache and name not in alias_cache:
             new_models.append({
@@ -176,7 +224,7 @@ def store_results(scrape_result: ScrapeResult):
             "scraped_at": now,
             "source_url": scrape_result.source_url,
             "category": category,
-            "total_models": scrape_result.total_models,
+            "total_models": len(scraped_models),
             "total_votes": scrape_result.total_votes,
             "scrape_duration_ms": scrape_result.scrape_duration_ms,
             "status": "success",
@@ -186,44 +234,65 @@ def store_results(scrape_result: ScrapeResult):
     snapshot_id = snapshot.data[0]["id"]
     logger.info("[%s] Created snapshot %s", category, snapshot_id)
 
-    if new_models:
-        model_cache = bulk_insert_new_models(client, new_models, model_cache)
-        logger.info("[%s] New models detected: %s", category,
-                    [m["canonical_name"] for m in new_models])
+    # From here on the snapshot row exists, so any failure has to take it back
+    # out — a snapshot left behind with status "success" and no rankings looks
+    # like a day Arena published an empty leaderboard.
+    try:
+        if new_models:
+            model_cache = bulk_insert_new_models(client, new_models, model_cache)
+            logger.info("[%s] New models detected: %s", category,
+                        [m["canonical_name"] for m in new_models])
 
-    # Build rankings batch
-    seen_model_ids: Set[str] = set()
-    rankings_batch = []
+        # Build rankings batch
+        seen_model_ids: Set[str] = set()
+        rankings_batch = []
 
-    for scraped_model in scrape_result.models:
-        name = scraped_model.model_name
-        model_id = model_cache.get(name) or alias_cache.get(name)
-        if not model_id:
-            logger.warning("[%s] Could not resolve model_id for: %s", category, name)
-            continue
+        for scraped_model in scraped_models:
+            name = scraped_model.model_name
+            model_id = model_cache.get(name) or alias_cache.get(name)
+            if not model_id:
+                logger.warning("[%s] Could not resolve model_id for: %s", category, name)
+                continue
 
-        seen_model_ids.add(model_id)
-        rankings_batch.append({
-            "snapshot_id": snapshot_id,
-            "model_id": model_id,
-            "rank": scraped_model.rank,
-            "rank_upper": scraped_model.rank_upper,
-            "rank_lower": scraped_model.rank_lower,
-            "score": float(scraped_model.score),
-            "score_ci": float(scraped_model.score_ci) if scraped_model.score_ci is not None else None,
-            "votes": scraped_model.votes,
-            "raw_model_name": scraped_model.model_name,
-            "raw_organization": scraped_model.organization,
-        })
+            if model_id in seen_model_ids:
+                # Distinct names resolving to one model — an alias pointing at a
+                # model that is also listed under its canonical name.
+                logger.warning(
+                    "[%s] %r resolves to a model already in this snapshot; skipping",
+                    category, name,
+                )
+                continue
 
-    # Bulk insert rankings
-    batch_size = 100
-    for i in range(0, len(rankings_batch), batch_size):
-        batch = rankings_batch[i:i + batch_size]
-        client.table("rankings").insert(batch).execute()
+            seen_model_ids.add(model_id)
+            rankings_batch.append({
+                "snapshot_id": snapshot_id,
+                "model_id": model_id,
+                "rank": scraped_model.rank,
+                "rank_upper": scraped_model.rank_upper,
+                "rank_lower": scraped_model.rank_lower,
+                "score": float(scraped_model.score),
+                "score_ci": float(scraped_model.score_ci) if scraped_model.score_ci is not None else None,
+                "votes": scraped_model.votes,
+                "raw_model_name": scraped_model.model_name,
+                "raw_organization": scraped_model.organization,
+            })
 
-    logger.info("[%s] Inserted %d rankings for snapshot %s",
-                category, len(rankings_batch), snapshot_id)
+        # Bulk insert rankings
+        batch_size = 100
+        for i in range(0, len(rankings_batch), batch_size):
+            batch = rankings_batch[i:i + batch_size]
+            client.table("rankings").insert(batch).execute()
+
+        logger.info("[%s] Inserted %d rankings for snapshot %s",
+                    category, len(rankings_batch), snapshot_id)
+
+        if len(rankings_batch) != len(scraped_models):
+            client.table("snapshots").update(
+                {"total_models": len(rankings_batch)}
+            ).eq("id", snapshot_id).execute()
+    except Exception:
+        rollback_snapshot(client, snapshot_id, category)
+        raise
 
     # Bulk update last_seen_at for all seen models
     seen_ids = list(seen_model_ids)
@@ -232,6 +301,7 @@ def store_results(scrape_result: ScrapeResult):
         client.table("models").update({"last_seen_at": now}).in_("id", batch_ids).execute()
 
     mark_inactive_models(client, seen_model_ids, now, category)
+    return len(rankings_batch)
 
 
 def record_failed_scrape(

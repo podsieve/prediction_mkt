@@ -104,7 +104,9 @@ def main():
     for result in results:
         # One category failing its sanity checks shouldn't stop the others.
         try:
-            store_results(result)
+            # The stored count can be lower than the parsed count — duplicate
+            # listings and unresolvable names are dropped on the way in.
+            stored_count = store_results(result)
         except Exception as e:
             logger.error("[%s] Refused to store scrape: %s", result.category, e)
             record_failed_scrape(
@@ -115,7 +117,7 @@ def main():
         logger.info(
             "[%s] Stored snapshot with %d models.",
             result.category,
-            result.total_models,
+            stored_count,
         )
 
     logger.info("Done. Stored %d/%d categories successfully.",

@@ -4,11 +4,16 @@ from __future__ import annotations
 import pytest
 
 from src.config import settings
-from src.db import SuspiciousScrapeError, check_new_model_surge
+from src.db import SuspiciousScrapeError, check_new_model_surge, dedupe_scraped_models
+from src.models import ScrapedModel
 
 
 def _models(n: int):
     return [{"canonical_name": f"model-{i}"} for i in range(n)]
+
+
+def _scraped(name: str, rank: int, score: float = 1400.0):
+    return ScrapedModel(rank=rank, model_name=name, score=score, votes=1000)
 
 
 class TestNewModelSurge:
@@ -42,3 +47,38 @@ class TestNewModelSurge:
         assert "[math]" in message
         assert "model-0" in message
         assert "src/parser.py" in message
+
+
+class TestDedupeScrapedModels:
+    def test_leaves_a_clean_board_alone(self):
+        models = [_scraped(f"model-{i}", i + 1) for i in range(5)]
+        assert dedupe_scraped_models(models, "overall") == models
+
+    def test_keeps_the_best_ranked_of_a_repeat_listing(self):
+        """Arena listed gemini-3.5-flash-high at both rank 9 and rank 11."""
+        models = [
+            _scraped("a", 8),
+            _scraped("gemini-3.5-flash-high", 9, score=1480),
+            _scraped("b", 10),
+            _scraped("gemini-3.5-flash-high", 11, score=1479),
+        ]
+        result = dedupe_scraped_models(models, "overall")
+        assert [m.model_name for m in result] == ["a", "gemini-3.5-flash-high", "b"]
+        assert result[1].rank == 9
+        assert result[1].score == 1480
+
+    def test_collapses_more_than_two_copies(self):
+        models = [_scraped("dup", i) for i in range(1, 5)]
+        result = dedupe_scraped_models(models, "coding")
+        assert len(result) == 1
+        assert result[0].rank == 1
+
+    def test_warns_naming_the_dropped_rows(self, caplog):
+        models = [_scraped("dup", 1), _scraped("dup", 7)]
+        with caplog.at_level("WARNING"):
+            dedupe_scraped_models(models, "math")
+        assert "[math]" in caplog.text
+        assert "dup (rank 7)" in caplog.text
+
+    def test_empty_board(self):
+        assert dedupe_scraped_models([], "overall") == []
