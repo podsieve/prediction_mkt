@@ -175,11 +175,19 @@ Key functions:
 - `new_model_report()` — Full report: rank/score change, votes gained, gap to #1
 
 ### `scripts/merge_models.py`
-CLI tool for handling model renames (codename→real name):
+CLI tool for handling model renames. Dry run by default:
 ```bash
-python scripts/merge_models.py "old-name" "real-name"
+python scripts/merge_models.py "old-name" "new-name"           # show the plan
+python scripts/merge_models.py "old-name" "new-name" --apply   # execute
 ```
-Moves all rankings from old→real, adds old as alias, deletes old row.
+Moves all rankings from old→new, records old as an alias so future scrapes still
+resolve, carries `first_seen_at` back if the old row was seen earlier, and deletes
+the old row. Rankings keep their `raw_model_name`, so the merge stays traceable.
+
+**Refuses to merge if both models appear in the same snapshot** — `rankings` is
+unique on `(snapshot_id, model_id)`, so two models that were live at once are not a
+rename, and merging would fail partway and leave the data half-moved. Confirm a
+rename by checking that rank/score/votes carry over unchanged at the handoff.
 
 ### `scripts/cleanup_garbage_models.py`
 One-off repair for the July 2026 parser regression (see *Guarding against parser
