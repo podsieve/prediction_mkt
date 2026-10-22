@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import List
+import time
+from typing import List, Optional
 
-import requests
+from curl_cffi import requests
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -19,11 +20,39 @@ from src.parser import parse_leaderboard
 
 logger = logging.getLogger(__name__)
 
+# Arena sits behind Cloudflare; plain `requests` gets 403 challenges from
+# GitHub Actions (and most datacenter IPs). curl_cffi impersonates a real
+# Chrome TLS/HTTP2 fingerprint so the challenge never fires.
 RECOVERABLE_ERRORS = (
     requests.exceptions.ConnectionError,
     requests.exceptions.Timeout,
     requests.exceptions.HTTPError,
 )
+
+_BLOCKED_PAGE_MARKERS = (
+    "Just a moment...",
+    "Enable JavaScript and cookies to continue",
+    "cf-mitigated",
+    "Access denied | arena.ai used Cloudflare",
+)
+
+# Reused across category fetches within one run so Cloudflare cookies stick.
+_session: Optional[requests.Session] = None
+
+
+def _get_session() -> requests.Session:
+    global _session
+    if _session is None:
+        _session = requests.Session(impersonate=settings.http_impersonate)
+    return _session
+
+
+def _assert_not_blocked(url: str, status_code: int, body: str) -> None:
+    """Raise HTTPError if Cloudflare served a challenge/deny page as 200."""
+    if any(marker in body for marker in _BLOCKED_PAGE_MARKERS):
+        raise requests.exceptions.HTTPError(
+            f"{status_code} Client Error: Cloudflare blocked {url}"
+        )
 
 
 @retry(
@@ -34,12 +63,20 @@ RECOVERABLE_ERRORS = (
     reraise=True,
 )
 def fetch_page(url: str) -> str:
-    response = requests.get(
+    # Let the impersonation profile supply browser headers (UA, sec-ch-ua,
+    # Accept-Encoding, etc.). A custom bot UA on top of Chrome TLS is a
+    # fingerprint mismatch Cloudflare has learned to reject.
+    headers = {}
+    if settings.user_agent:
+        headers["User-Agent"] = settings.user_agent
+
+    response = _get_session().get(
         url,
-        headers={"User-Agent": settings.user_agent},
+        headers=headers or None,
         timeout=settings.request_timeout,
     )
     response.raise_for_status()
+    _assert_not_blocked(url, response.status_code, response.text)
     return response.text
 
 
@@ -76,7 +113,12 @@ def scrape() -> ScrapeResult:
 def scrape_all() -> List[ScrapeResult]:
     """Scrape all configured categories and return a list of results."""
     results: List[ScrapeResult] = []
-    for category, url in settings.scrape_categories.items():
+    categories = list(settings.scrape_categories.items())
+    for i, (category, url) in enumerate(categories):
+        if i > 0:
+            # Brief pause between categories — rapid back-to-back fetches
+            # from one IP can trip Cloudflare's 429 rate limit.
+            time.sleep(settings.retry_delay)
         try:
             result = scrape_category(category, url)
             results.append(result)
