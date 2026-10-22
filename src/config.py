@@ -7,10 +7,12 @@ from pydantic_settings import BaseSettings
 
 # Map of category slug -> Arena.ai URL.
 # To add a new category, just add an entry here.
+# Paths moved under /leaderboard/chat/text/ in late 2026; keep the
+# *-no-style-control variants so the time series stays comparable.
 DEFAULT_SCRAPE_CATEGORIES: Dict[str, str] = {
-    "overall": "https://arena.ai/leaderboard/text/overall-no-style-control",
-    "coding": "https://arena.ai/leaderboard/text/coding-no-style-control",
-    "math": "https://arena.ai/leaderboard/text/math-no-style-control",
+    "overall": "https://arena.ai/leaderboard/chat/text/overall-no-style-control",
+    "coding": "https://arena.ai/leaderboard/chat/text/coding-no-style-control",
+    "math": "https://arena.ai/leaderboard/chat/text/math-no-style-control",
 }
 
 
@@ -20,13 +22,19 @@ class Settings(BaseSettings):
 
     # Legacy single-URL field kept for backward compat; ignored when
     # scrape_categories is set.
-    scrape_url: str = "https://arena.ai/leaderboard/text/overall-no-style-control"
+    scrape_url: str = (
+        "https://arena.ai/leaderboard/chat/text/overall-no-style-control"
+    )
     scrape_categories: Dict[str, str] = DEFAULT_SCRAPE_CATEGORIES
 
     request_timeout: int = 30
     max_retries: int = 3
     retry_delay: float = 5.0
-    user_agent: str = "ArenaLeaderboardTracker/1.0"
+    # Empty = use curl_cffi's Chrome impersonation UA. Setting a custom
+    # bot UA while impersonating Chrome TLS tends to get 403'd.
+    user_agent: str = ""
+    # curl_cffi browser profile. "chrome" tracks the newest built-in profile.
+    http_impersonate: str = "chrome"
 
     # Refuse to store a snapshot that wants to create more than this many new
     # models at once. Arena has never added more than 8 in a day; a July 2026
