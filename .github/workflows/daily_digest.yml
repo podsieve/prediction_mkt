@@ -27,3 +27,13 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: python -m alerts.run digest
+
+      # Separate workflow from the scrape, so this still fires if scraping has
+      # stopped running altogether (e.g. GitHub disabled the schedule).
+      - name: Check scraper health
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: python -m alerts.run health --force

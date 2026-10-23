@@ -365,6 +365,18 @@ python scripts/merge_models.py "Claude Opus Preview" "Claude Opus"
 ```
 All rankings from preview→opus, adds preview as alias, deletes preview row.
 
+### Recovering From a Refused Scrape
+If Arena relabels models and the new-model guard refuses the scrape, the parsed
+rows are saved to `raw_scrapes` (run `sql/004_raw_scrapes.sql` once to create it)
+and an email goes out. Fix the cause, then replay what was refused:
+```bash
+python scripts/alias_renamed_models.py --apply   # if Arena renamed models
+python -m src.replay                              # dry run
+python -m src.replay --apply                      # store them, oldest first
+```
+Scraper health emails come from `python -m alerts.run health`: once on the first
+failed scrape, and when no scrape has succeeded for 6 hours (then daily).
+
 ### Dashboard
 ```bash
 streamlit run dashboard/app.py

@@ -135,7 +135,8 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    from src.db import record_failed_scrape, store_results
+    from src.db import get_client, record_failed_scrape, store_results
+    from src.raw_scrapes import save_raw_scrape
 
     results = scrape_all()
     if not results:
@@ -151,6 +152,9 @@ def main():
             stored_count = store_results(result)
         except Exception as e:
             logger.error("[%s] Refused to store scrape: %s", result.category, e)
+            # Arena only shows its current board, so keep what we parsed for
+            # `python -m src.replay` instead of losing it with the failure.
+            save_raw_scrape(get_client(), result, str(e))
             record_failed_scrape(
                 str(e), category=result.category, source_url=result.source_url
             )
