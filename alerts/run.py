@@ -31,18 +31,33 @@ def run_daily_digest():
     logger.info("Daily digest sent")
 
 
+def run_health(force: bool):
+    from alerts.health import run_health_check
+
+    run_health_check(force=force)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Arena leaderboard alerts")
     parser.add_argument(
         "mode",
-        choices=["events", "digest"],
-        help="'events' for post-scrape alerts, 'digest' for daily summary",
+        choices=["events", "digest", "health"],
+        help="'events' for post-scrape alerts, 'digest' for daily summary, "
+        "'health' for scraper failure/staleness alerts",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="health only: email whenever data is stale, not just at the first "
+        "detection and daily after",
     )
     args = parser.parse_args()
 
     try:
         if args.mode == "events":
             run_event_alerts()
+        elif args.mode == "health":
+            run_health(args.force)
         else:
             run_daily_digest()
     except Exception as e:

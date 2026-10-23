@@ -189,8 +189,33 @@ def rollback_snapshot(client, snapshot_id: str, category: str):
         )
 
 
-def store_results(scrape_result: ScrapeResult) -> int:
-    """Store one category's scrape. Returns the number of rankings written."""
+def touch_seen_models(client, seen_ids: List[str], now: str, replay: bool) -> None:
+    """Stamp models as seen at `now`.
+
+    A replayed scrape is older than data already in the database, so it may only
+    widen a model's seen window (earlier first_seen_at, later last_seen_at),
+    never narrow it.
+    """
+    for i in range(0, len(seen_ids), 100):
+        batch_ids = seen_ids[i:i + 100]
+        if replay:
+            client.table("models").update({"last_seen_at": now}).in_("id", batch_ids).lt(
+                "last_seen_at", now
+            ).execute()
+            client.table("models").update({"first_seen_at": now}).in_("id", batch_ids).gt(
+                "first_seen_at", now
+            ).execute()
+        else:
+            client.table("models").update({"last_seen_at": now}).in_("id", batch_ids).execute()
+
+
+def store_results(scrape_result: ScrapeResult, replay: bool = False) -> int:
+    """Store one category's scrape. Returns the number of rankings written.
+
+    `replay=True` is for a scrape saved earlier (src/replay.py): it is older than
+    the snapshots now in the database, so it must not deactivate models that
+    appeared since, or move their timestamps backwards.
+    """
     client = get_client()
     now = scrape_result.scraped_at.isoformat()
     category = scrape_result.category
@@ -294,13 +319,11 @@ def store_results(scrape_result: ScrapeResult) -> int:
         rollback_snapshot(client, snapshot_id, category)
         raise
 
-    # Bulk update last_seen_at for all seen models
-    seen_ids = list(seen_model_ids)
-    for i in range(0, len(seen_ids), 100):
-        batch_ids = seen_ids[i:i + 100]
-        client.table("models").update({"last_seen_at": now}).in_("id", batch_ids).execute()
+    touch_seen_models(client, list(seen_model_ids), now, replay)
 
-    mark_inactive_models(client, seen_model_ids, now, category)
+    # "Previous snapshot" means the latest one, which a replay is not.
+    if not replay:
+        mark_inactive_models(client, seen_model_ids, now, category)
     return len(rankings_batch)
 
 

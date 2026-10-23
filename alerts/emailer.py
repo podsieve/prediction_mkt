@@ -77,6 +77,27 @@ def send_alert_email(events: List[AlertEvent]):
     logger.info("Sent alert email with %d events to %s", len(events), settings.alert_recipient)
 
 
+def send_health_email(issues: list):
+    resend.api_key = settings.resend_api_key
+    rows = "".join(f"<li><b>{i.category}</b>: {i.message}</li>" for i in issues)
+    body = (
+        f"<p>The scraper is not storing data normally.</p><ul>{rows}</ul>"
+        "<p>Check the latest run in the GitHub Actions tab. If Arena changed its "
+        "model names, run <code>scripts/alias_renamed_models.py</code>, then "
+        "<code>python -m src.replay</code> to store the scrapes that were refused.</p>"
+    )
+    subject = f"Arena scraper: {len(issues)} problem{'s' if len(issues) != 1 else ''}"
+    html = _build_html(body, subject, dashboard_url=settings.dashboard_url)
+
+    resend.Emails.send({
+        "from": settings.alert_from_email,
+        "to": [settings.alert_recipient],
+        "subject": subject,
+        "html": html,
+    })
+    logger.info("Sent health email with %d issues to %s", len(issues), settings.alert_recipient)
+
+
 def send_digest_email(digest_html: str):
     resend.api_key = settings.resend_api_key
     subject = "Arena Leaderboard — Daily Digest"
