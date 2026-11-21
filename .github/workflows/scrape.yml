@@ -14,9 +14,16 @@ on:
         required: false
         default: 'manual run'
 
+# Arena's Cloudflare blocks GitHub's hosted runners (HTTP 403), so this job runs
+# on a self-hosted runner on a normal connection. Set one up with
+# scripts/runner.sh; any machine registered with the label below can take it.
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
 jobs:
   scrape:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, arena-scraper]
     timeout-minutes: 5
 
     steps:
