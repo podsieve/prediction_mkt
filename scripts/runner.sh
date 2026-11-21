@@ -9,7 +9,7 @@
 # this way can pick the job up.
 set -euo pipefail
 
-REPO="podsieve/prediction_mkt"
+REPO="voralabs/prediction_mkt"
 LABEL="arena-scraper"
 RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner-arena}"
 NAME="${RUNNER_NAME:-$(scutil --get LocalHostName)}"
