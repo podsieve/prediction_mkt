@@ -29,10 +29,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
+      # actions/setup-python assumes GitHub's hosted macOS layout (/Users/runner),
+      # so build a venv from a Python already installed on the runner instead.
+      - name: Set up Python
+        run: |
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          PY="$(command -v python3.13 || command -v python3.12 || command -v python3.11 || true)"
+          [ -n "$PY" ] || { echo "Install Python 3.11+ (brew install python@3.13)" >&2; exit 1; }
+          "$PY" -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         run: pip install -r requirements.txt

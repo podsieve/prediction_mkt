@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -186,11 +187,103 @@ def parse_total_votes(soup: BeautifulSoup) -> Optional[int]:
     return None
 
 
+# Arena now ships the whole board as JSON inside Next.js flight chunks
+# (`self.__next_f.push([1,"..."])`) and renders only a top-15 chart as HTML, so
+# there is no <table> to read. The chunks concatenate into one stream that holds
+# an `"entries":[{...}]` array of every model.
+_FLIGHT_CHUNK = re.compile(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)')
+_ENTRIES_KEY = re.compile(r'"entries":\[')
+
+
+def extract_embedded_entries(html: str) -> List[dict]:
+    """Return the leaderboard's model entries from the page's embedded JSON.
+
+    Empty list when the page has no such payload (the old table layout, or a
+    layout we don't recognise). Other `entries` arrays in the stream (pricing
+    data and the like) are skipped by checking for a model name and a rating.
+    """
+    chunks = []
+    for raw in _FLIGHT_CHUNK.findall(html):
+        try:
+            chunks.append(json.loads(raw))
+        except ValueError:
+            continue
+    stream = "".join(chunks)
+
+    decoder = json.JSONDecoder()
+    for match in _ENTRIES_KEY.finditer(stream):
+        try:
+            entries, _ = decoder.raw_decode(stream, match.end() - 1)
+        except ValueError:
+            continue
+        if (
+            entries
+            and isinstance(entries[0], dict)
+            and "modelDisplayName" in entries[0]
+            and "rating" in entries[0]
+        ):
+            return entries
+    return []
+
+
+def entry_to_model(entry: dict) -> ScrapedModel:
+    upper, lower = entry.get("rankUpper"), entry.get("rankLower")
+    rating_upper, rating_lower = entry.get("ratingUpper"), entry.get("ratingLower")
+    # The table showed the 95% CI as a "±" half-width; keep storing that.
+    score_ci = None
+    if rating_upper is not None and rating_lower is not None:
+        score_ci = round((rating_upper - rating_lower) / 2, 1)
+
+    return ScrapedModel(
+        rank=entry["rank"],
+        rank_spread_raw=f"{upper}↔{lower}" if upper and lower else None,
+        rank_upper=upper,
+        rank_lower=lower,
+        model_name=entry["modelDisplayName"],
+        organization=entry.get("modelOrganization"),
+        license_type=entry.get("license"),
+        score=round(entry["rating"], 1),
+        score_ci=score_ci,
+        votes=entry["votes"],
+    )
+
+
+def parse_embedded_models(entries: List[dict]) -> Tuple[List[ScrapedModel], int]:
+    """Convert embedded entries to models, returning (models, parse_errors)."""
+    models: List[ScrapedModel] = []
+    errors = 0
+    for entry in entries:
+        try:
+            models.append(entry_to_model(entry))
+        except Exception as e:
+            errors += 1
+            logger.warning(
+                "Failed to parse entry %r | Error: %s", entry.get("modelDisplayName"), e
+            )
+    return models, errors
+
+
 def parse_leaderboard(html: str, source_url: str, category: str = "overall") -> ScrapeResult:
     start_time = time.monotonic()
     soup = BeautifulSoup(html, "html.parser")
     raw_html_hash = hashlib.sha256(html.encode()).hexdigest()
     total_votes = parse_total_votes(soup)
+
+    entries = extract_embedded_entries(html)
+    if entries:
+        models, parse_errors = parse_embedded_models(entries)
+        if parse_errors:
+            logger.warning("Failed to parse %d entries out of %d", parse_errors, len(entries))
+        return ScrapeResult(
+            scraped_at=datetime.now(timezone.utc),
+            source_url=source_url,
+            category=category,
+            total_models=len(models),
+            total_votes=total_votes,
+            models=models,
+            raw_html_hash=raw_html_hash,
+            scrape_duration_ms=int((time.monotonic() - start_time) * 1000),
+        )
 
     tbody = soup.find("tbody")
     if not tbody:

@@ -154,7 +154,9 @@ def main():
             logger.error("[%s] Refused to store scrape: %s", result.category, e)
             # Arena only shows its current board, so keep what we parsed for
             # `python -m src.replay` instead of losing it with the failure.
-            save_raw_scrape(get_client(), result, str(e))
+            # An empty parse has nothing to replay, so don't leave it pending.
+            if result.models:
+                save_raw_scrape(get_client(), result, str(e))
             record_failed_scrape(
                 str(e), category=result.category, source_url=result.source_url
             )

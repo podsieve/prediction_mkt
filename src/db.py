@@ -216,10 +216,17 @@ def store_results(scrape_result: ScrapeResult, replay: bool = False) -> int:
     the snapshots now in the database, so it must not deactivate models that
     appeared since, or move their timestamps backwards.
     """
-    client = get_client()
     now = scrape_result.scraped_at.isoformat()
     category = scrape_result.category
 
+    # A page that parsed to nothing means the layout changed, not that Arena
+    # emptied its leaderboard — storing it would record a bogus "success".
+    if not scrape_result.models:
+        raise SuspiciousScrapeError(
+            f"[{category}] parsed 0 models; refusing to store an empty snapshot"
+        )
+
+    client = get_client()
     model_cache, alias_cache = load_caches(client)
 
     # A model listed twice can't be stored twice — the unique (snapshot_id,
