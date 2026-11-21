@@ -5,6 +5,8 @@ import os
 import pytest
 
 from src.parser import (
+    entry_to_model,
+    extract_embedded_entries,
     parse_int,
     parse_leaderboard,
     parse_model_cell,
@@ -16,6 +18,8 @@ FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 OVERALL_FIXTURE = os.path.join(FIXTURE_DIR, "sample_leaderboard.html")
 CODING_FIXTURE = os.path.join(FIXTURE_DIR, "sample_coding_leaderboard.html")
 MATH_FIXTURE = os.path.join(FIXTURE_DIR, "sample_math_leaderboard.html")
+# Arena's layout since Nov 2026: no <table>, the board is JSON in the page.
+EMBEDDED_FIXTURE = os.path.join(FIXTURE_DIR, "sample_embedded_leaderboard.html")
 
 
 # --- Fixtures ---
@@ -452,3 +456,72 @@ class TestParseTotalVotes:
         votes = parse_total_votes(soup)
         assert votes is not None
         assert votes > 0
+
+
+class TestParseEmbeddedLeaderboard:
+    """Arena dropped the HTML table and ships the board as embedded JSON."""
+
+    @pytest.fixture(scope="class")
+    def result(self):
+        with open(EMBEDDED_FIXTURE, "r") as f:
+            return parse_leaderboard(f.read(), "https://arena.ai/leaderboard", category="overall")
+
+    def test_parses_the_whole_board(self, result):
+        assert result.total_models == 426
+        assert len(result.models) == 426
+
+    def test_total_votes(self, result):
+        assert result.total_votes == 9_213_799
+
+    def test_first_model(self, result):
+        first = result.models[0]
+        assert first.rank == 1
+        assert first.model_name == "Gemini 4 Carbon (High)"
+        assert first.score == 1539.3
+        assert first.votes == 4262
+        assert first.organization == "Google"
+        assert first.license_type == "Proprietary"
+
+    def test_rank_spread_and_ci(self, result):
+        first = result.models[0]
+        assert (first.rank_upper, first.rank_lower) == (1, 3)
+        assert first.rank_spread_raw == "1↔3"
+        # 95% CI 1,530 to 1,549 -> half-width, as the old "±" column stored it
+        assert first.score_ci == pytest.approx(9.6)
+
+    def test_ranks_are_sequential(self, result):
+        assert [m.rank for m in result.models] == list(range(1, 427))
+
+    def test_names_are_unique(self, result):
+        names = [m.model_name for m in result.models]
+        assert len(set(names)) == len(names)
+
+    def test_ignores_other_entries_arrays(self):
+        """The stream also carries a pricing `entries` array with no ratings."""
+        with open(EMBEDDED_FIXTURE, "r") as f:
+            entries = extract_embedded_entries(f.read())
+        assert len(entries) == 426
+        assert "modelDisplayName" in entries[0]
+
+    def test_falls_back_to_the_table_when_there_is_no_embedded_json(self):
+        html = (
+            "<table><tbody><tr>"
+            "<td>1</td><td><span>1</span><span>2</span></td>"
+            "<td><a>model-x</a></td><td><span>1400</span><span>±5</span></td><td>1,234</td>"
+            "</tr></tbody></table>"
+        )
+        assert extract_embedded_entries(html) == []
+        model = parse_leaderboard(html, "u").models[0]
+        assert (model.model_name, model.score, model.votes) == ("model-x", 1400.0, 1234)
+
+    def test_entry_without_confidence_bounds(self):
+        model = entry_to_model(
+            {"rank": 5, "modelDisplayName": "Some Model", "rating": 1400.04, "votes": 10}
+        )
+        assert model.score == 1400.0
+        assert model.score_ci is None
+        assert model.rank_spread_raw is None
+
+    def test_page_with_no_leaderboard_parses_to_nothing(self):
+        result = parse_leaderboard("<html><body>Just a moment...</body></html>", "u")
+        assert result.total_models == 0

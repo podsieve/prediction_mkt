@@ -4,8 +4,13 @@ from __future__ import annotations
 import pytest
 
 from src.config import settings
-from src.db import SuspiciousScrapeError, check_new_model_surge, dedupe_scraped_models
-from src.models import ScrapedModel
+from src.db import (
+    SuspiciousScrapeError,
+    check_new_model_surge,
+    dedupe_scraped_models,
+    store_results,
+)
+from src.models import ScrapedModel, ScrapeResult
 
 
 def _models(n: int):
@@ -82,3 +87,20 @@ class TestDedupeScrapedModels:
 
     def test_empty_board(self):
         assert dedupe_scraped_models([], "overall") == []
+
+
+class TestEmptyScrape:
+    def test_refuses_to_store_an_empty_snapshot(self, monkeypatch):
+        """A layout change once parsed to 0 models and was stored as a success."""
+        monkeypatch.setattr("src.db.get_client", lambda: pytest.fail("touched the database"))
+        empty = ScrapeResult(
+            scraped_at="2026-11-21T21:51:12+00:00",
+            source_url="https://arena.ai/leaderboard",
+            category="overall",
+            total_models=0,
+            models=[],
+            raw_html_hash="x",
+            scrape_duration_ms=1,
+        )
+        with pytest.raises(SuspiciousScrapeError, match="0 models"):
+            store_results(empty)
