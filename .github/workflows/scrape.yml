@@ -1,12 +1,9 @@
 name: Scrape Arena Leaderboard
 
 on:
-  schedule:
-    # Every 2 hours. Arena refreshes roughly weekly, so most runs are exact
-    # duplicates, but a uniform grid pins each refresh to a <=2h window without
-    # betting on the day-of-week pattern holding (the Thursday clustering we
-    # saw in June decayed by late July).
-    - cron: '0 */2 * * *'
+  # No cron here: GitHub's scheduler skipped most runs, so the every-2-hours
+  # schedule lives in a launchd timer on the always-on Mac
+  # (scripts/scraper_timer.sh). This workflow is the manual fallback.
   workflow_dispatch:
     inputs:
       reason:
