@@ -262,10 +262,9 @@ WHERE first_seen_at > now() - interval '7 days'
 
 File: `.github/workflows/scrape.yml`
 
-- **Schedule:** Every 2 hours (`0 */2 * * *`). Arena refreshes roughly weekly, so most runs are duplicates; the uniform grid pins each refresh to a ≤2h window without relying on a day-of-week pattern
-- **Manual trigger:** Workflow dispatch with optional reason
-- **Environment:** Ubuntu latest, Python 3.12
-- **Dependencies:** pip cache
+- **Schedule:** None. The every-2-hours scrape runs from a launchd timer on an always-on Mac (see "Scheduling the Scrape on an Always-On Mac"), because GitHub skipped most scheduled runs. Arena refreshes roughly weekly, so most runs are duplicates; the uniform 2-hour grid pins each refresh to a ≤2h window
+- **Manual trigger:** Workflow dispatch with optional reason, on the self-hosted `arena-scraper` runner (Arena's Cloudflare blocks GitHub's hosted runners)
+- **Environment:** Self-hosted macOS runner, venv from the machine's Python 3.11+
 - **Secrets required:**
   - `SUPABASE_URL`
   - `SUPABASE_KEY`
