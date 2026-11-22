@@ -377,6 +377,27 @@ python -m src.replay --apply                      # store them, oldest first
 Scraper health emails come from `python -m alerts.run health`: once on the first
 failed scrape, and when no scrape has succeeded for 6 hours (then daily).
 
+### Scheduling the Scrape on an Always-On Mac
+
+GitHub skips or delays scheduled workflows for hours at a time, and Arena's
+Cloudflare blocks GitHub's hosted runners, so the scrape can run from a Mac that
+stays on instead:
+
+```bash
+cp .env.example .env     # fill in SUPABASE_URL, SUPABASE_KEY, RESEND_API_KEY
+scripts/scraper_timer.sh install   # every 2 hours at :17 via launchd
+scripts/scraper_timer.sh run       # run one cycle now
+scripts/scraper_timer.sh status    # loaded? last log lines
+scripts/scraper_timer.sh remove
+```
+
+Each cycle (`scripts/run_scrape.sh`) pulls the latest code, refreshes the venv if
+`requirements.txt` changed, scrapes, runs the alert checks if the scrape worked,
+and always runs the health check. Logs go to `~/Library/Logs/arena-scraper.log`.
+It is a LaunchAgent, so it runs while the user is logged in: set the Mac to never
+sleep and to log in automatically after a restart. Needs Python 3.11+
+(`brew install python@3.13`).
+
 ### Dashboard
 ```bash
 streamlit run dashboard/app.py
